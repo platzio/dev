@@ -66,6 +66,10 @@ When updating `../site`:
 - Branch off `origin/main`, commit changes there.
 - `git push -u origin <branch>` and `gh pr create --base main`.
 - Wait for review before merging.
+- **Run `npm run format` before committing.** The site repo has prettier
+  set up; markdown tables and other formatting must be prettier-clean.
+  CI runs `npm run format:check` and rejects non-conforming PRs. See
+  [[feedback-markdown-formatting]] for the full rule.
 
 ### Cross-repo safety
 
