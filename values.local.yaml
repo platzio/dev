@@ -1,0 +1,105 @@
+# Helm values overrides for the local Tilt-driven development environment.
+# Layered on top of helm-charts/charts/platzio/values.yaml.
+
+images:
+  backend:
+    # Tag is replaced by Tilt at runtime via image_deps when docker_build runs.
+    repository: platzio/backend-dev
+    tag: latest
+    pullPolicy: IfNotPresent
+  frontend:
+    repository: platzio/frontend-dev
+    tag: latest
+    pullPolicy: IfNotPresent
+  helm:
+    # Anything with bash + helm + base64 will do. The backend's helm pod no
+    # longer needs the AWS CLI in `provider=oci` mode.
+    repository: alpine/helm
+    tag: "3.16.2"
+
+# Use the in-cluster Postgres provisioned by backend/dev/manifests/postgres.yaml.
+database:
+  secretName: postgres-creds
+
+# Frontend serves on the cluster; ingress on NodePort exposes it on host:8080.
+ownUrlOverride: "http://localhost:8080"
+
+auth:
+  adminEmails:
+    - admin@example.com
+  oidc:
+    serverUrl:
+      valueFrom:
+        secretKeyRef:
+          name: oidc-config
+          key: serverUrl
+    clientId:
+      valueFrom:
+        secretKeyRef:
+          name: oidc-config
+          key: clientId
+    clientSecret:
+      valueFrom:
+        secretKeyRef:
+          name: oidc-config
+          key: clientSecret
+
+api:
+  service:
+    type: NodePort
+  serviceAccount:
+    name: platz-api
+
+# Run k8s-agent in `local` mode against the in-cluster API server.
+# `localContext: ""` makes the agent use the kubeconfig's current-context;
+# inside the pod that resolves to the in-cluster service account credentials
+# (kube::Client::try_default() picks up `/var/run/secrets/kubernetes.io/serviceaccount/`).
+k8sAgent:
+  instances:
+    - name: default
+      provider: local
+      localContext: ""
+      serviceAccount:
+        name: ""
+        annotations: {}
+      extraEnv:
+        # Faster cluster refresh in dev — upstream default is 1h.
+        - name: K8S_REFRESH_INTERVAL
+          value: "30s"
+        # Don't try to manage deployment credentials secrets locally.
+        - name: PLATZ_DISABLE_DEPLOYMENT_CREDENTIALS
+          value: "true"
+
+# Run chart-discovery against the in-cluster OCI registry.
+chartDiscovery:
+  instances:
+    - name: default
+      enableTagParser: false
+      provider: oci
+      oci:
+        registryUrl: "http://registry.platz.svc.cluster.local:5000"
+        pollInterval: 5s
+      ecrEvents:
+        queueName: ""
+        regionName: ""
+      serviceAccount:
+        name: ""
+        annotations: {}
+      extraEnv: []
+
+# Frontend: surfaced via NodePort so the browser at http://localhost:8080
+# reaches it through kind's host port mapping.
+frontend:
+  service:
+    type: NodePort
+
+# No ingress / cert-manager / backup-job in local dev.
+ingress:
+  enabled: false
+backupJob:
+  enabled: false
+certManager:
+  certificate:
+    create: false
+  issuer:
+    create: false
