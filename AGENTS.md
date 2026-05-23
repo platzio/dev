@@ -49,6 +49,31 @@ harness (Tilt, manifests, seed charts, agent config).
 This is the intended workflow — it's not an error if a Claude session
 running in `dev/` ends up `git commit`-ing across three repos.
 
+## Per-repo workflow conventions
+
+Most sibling repos accept the standard flow: commit, push a feature
+branch, open a PR. A few have stricter rules.
+
+### `../site` — PR-only, publish-on-merge
+
+`platzio/site` is the public Docusaurus site published at
+<https://platz.io>. **Always open a PR; never push to `main`.** `main` is
+protected, and merging a PR triggers the publish workflow. Direct pushes
+to `main` are rejected and would skip the review step.
+
+When updating `../site`:
+
+- Branch off `origin/main`, commit changes there.
+- `git push -u origin <branch>` and `gh pr create --base main`.
+- Wait for review before merging.
+
+### Cross-repo safety
+
+- Never commit absolute filesystem paths from the user's machine
+  (`/Users/...`, `/home/...`) — see [[feedback-no-absolute-paths]].
+  Use workspace-relative paths only (`../backend`, `../frontend`, …).
+- Never run `gh auth ...` subcommands — see [[feedback-no-gh-auth]].
+
 ## Bring-up
 
 ```bash
