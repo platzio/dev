@@ -124,5 +124,10 @@ running container after syncing edits. The default Docker build target
 
 Per-user overrides go in `.claude/settings.local.json`, which is gitignored.
 
-`.claude/skills/` is reserved for project-specific Claude skills. Empty
-placeholder for now; populate as workflows stabilize.
+[`.claude/skills/`](.claude/skills/) carries project-specific Claude
+skills. Currently:
+
+* [`release-version`](.claude/skills/release-version/SKILL.md) — cuts a
+  Platzio release across all sibling repos (backend → frontend →
+  base-image → helm-charts → terraform → site). Triggered when the user
+  asks to release a version.
