@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo check *)",
+      "Bash(cargo clippy *)",
+      "Bash(cargo test *)",
+      "Bash(cargo fmt *)",
+      "Bash(cargo build *)",
+      "Bash(helm template *)",
+      "Bash(helm lint *)",
+      "Bash(docker buildx *)",
+      "Bash(tilt *)",
+      "Bash(kubectl get *)",
+      "Bash(kubectl describe *)",
+      "Bash(kubectl logs *)",
+      "Bash(kind get clusters)",
+      "Bash(ls -la *)"
+    ],
+    "additionalDirectories": [
+      "../backend",
+      "../frontend",
+      "../helm-charts",
+      "../sdk-rs",
+      "../sdk-js",
+      "../chart-ext",
+      "../cli",
+      "../docs",
+      "../site",
+      "../base-image",
+      "../design",
+      "../terraform-aws-platzio"
+    ]
+  }
+}
