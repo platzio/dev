@@ -325,11 +325,11 @@ annotations:
   artifacthub.io/prerelease: "false"    # or "true" if beta
   artifacthub.io/changes: |
     - kind: added
-      description: <short release note item>
+      description: "<short release note item>"
     - kind: changed
-      description: <short release note item>
+      description: "<short release note item>"
     - kind: fixed
-      description: <short release note item>
+      description: "<short release note item>"
 ```
 
 Conventions:
@@ -343,6 +343,26 @@ Conventions:
   is one of `added` / `changed` / `removed` / `fixed` / `security` /
   `deprecated`. Keep each entry short — these surface in
   ArtifactHub's UI; the full prose lives in the site blog post later.
+- **Always wrap each `description:` in double quotes.** Artifact Hub
+  validates each `description:` and rejects unquoted strings containing
+  any of:
+
+  ```
+  {}:[],&*#?|-<>=!%@
+  ```
+
+  Since most of our descriptions reference component names with hyphens
+  (`chart-discovery`, `k8s-agent`, `resource-sync`) or include `=` / `,`
+  inside parentheses, every entry needs quotes:
+
+  ```yaml
+  - kind: added
+    description: "extraEnv on api, chart-discovery, k8s-agent"
+  ```
+
+  An unquoted entry will surface as a scan error on Artifact Hub
+  (`invalid changes annotation`) after release, even though Helm itself
+  accepts it.
 - **Don't sneak in unrelated items.** Only ship release notes for what
   actually changed in this version's commits.
 
