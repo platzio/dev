@@ -90,6 +90,36 @@ the workflow:
 | sdk-rs     | v0.6.3            | v0.6.4            | (hand-maintained)      |
 | sdk-js     | 0.6.1             | 0.6.9             | (matches backend ver.) |
 
+### Inventory new settings and flags
+
+While walking the commit log of each repo, separately note **any new
+configuration the release introduces**: env vars, CLI flags, config
+file keys, feature toggles. These have to be propagated downstream —
+the helm chart, the terraform module, and the docs all need to learn
+about them, or operators won't be able to use the new behavior. Keep a
+running list as you read the commits:
+
+| Repo    | New setting        | Type     | Default      | Notes                       |
+| ------- | ------------------ | -------- | ------------ | --------------------------- |
+| backend | `PLATZ_FOO_TOKEN`  | env var  | (none)       | required if foo enabled     |
+| backend | `--enable-bar`     | CLI flag | false        | gates the bar subsystem     |
+
+How to find them efficiently:
+
+- **Backend (Rust):** look for additions to `clap` derive structs in
+  the relevant binary's `main.rs` / `Args` struct, additions to
+  `envy`/`serde` config structs, and any new `std::env::var(...)`
+  calls. `git diff $LAST_TAG..origin/main -- '*.rs' | grep -E '(#\[arg|#\[clap|env::var|#\[serde\(rename)'`
+  is a fast first pass.
+- **Frontend (Vue):** look for new keys read from `window.config` /
+  build-time env, since those are populated by the helm chart's
+  config template.
+
+This inventory drives the **new-settings checklist** referenced in
+Phases 4, 5, and 6. Don't skip it — settings that ship in the
+binaries but not in the chart values are invisible to operators
+running via helm, and that's a common release-day miss.
+
 ## Phase 2 — Tag and push backend / frontend / base-image
 
 For each repo that has changes:
@@ -335,6 +365,29 @@ images:
 Only bump the ones that have new tags from Phase 2. Reuse the existing
 tag verbatim for the others.
 
+### Wire in any new settings from Phase 1's inventory
+
+Before committing, walk the **new-settings inventory** from Phase 1
+and make sure each entry is exposed by the chart:
+
+- **New env vars / CLI flags** → add a default key under the relevant
+  section of `values.yaml` (e.g. `backend.env`, `backend.config`),
+  and reference it from the corresponding template under
+  `charts/platzio/templates/` so it actually reaches the pod. A
+  setting that lives in `values.yaml` but isn't templated through is
+  dead weight — search the templates dir for similar existing
+  settings to mirror the wiring pattern.
+- **New required settings** → if a setting has no sensible default,
+  either pick one and document it, or fail fast in the template with
+  `{{ required "..." }}` so misconfiguration is loud instead of
+  silent at runtime.
+- **Sensitive values** (tokens, keys) → follow the chart's existing
+  secret pattern (usually `existingSecret` + key name rather than
+  inlining the value). Never default a secret to a non-empty string.
+
+Reflect each newly exposed setting in `artifacthub.io/changes` as a
+`kind: added` entry so operators see it in the chart's changelog.
+
 Commit both files in one commit:
 
 ```bash
@@ -382,6 +435,27 @@ places. Both must move together.
 
    Sanity-check the diff before staging — sed can match unintended
    substrings if the version string isn't unique enough.
+
+### Expose any new settings as Terraform variables
+
+For each entry in Phase 1's new-settings inventory that was wired into
+the helm chart in Phase 4, decide whether the Terraform module should
+expose it too:
+
+- **Cluster-wide, operator-tunable settings** (timeouts, replica
+  counts, feature toggles, integration tokens) → add a corresponding
+  `variable` in `modules/main/variables.tf` and plumb it through
+  `modules/main/main.tf` into the `helm_release` resource's `set`
+  blocks. Match the variable name and default to the chart's key
+  where reasonable.
+- **Internal-only settings** that operators shouldn't touch → leave
+  them out of Terraform; the chart default is enough.
+- **New required settings** → make the Terraform variable required
+  (omit `default`) and document it in the README's inputs table.
+
+Update `README.md`'s inputs table for every variable you add or
+change. Mention them in the new-tag commit message as well so the
+release diff is self-documenting.
 
 Commit, tag with `v<NEW_VERSION>` (with the leading `v`, matching this
 repo's tag style), push:
@@ -463,6 +537,17 @@ If the release introduces user-facing behavior changes, update the
 relevant pages under `../site/docs/guide/` in the same PR. Run
 `npm run format` (see [[feedback-markdown-formatting]]) before
 committing — the site repo's CI rejects unformatted markdown.
+
+**Document every entry from Phase 1's new-settings inventory.** For
+each new env var / CLI flag / chart value / Terraform variable, find
+the right page under `../site/docs/` and add it: the configuration
+reference for env vars and flags, the helm/values reference for chart
+values, and the Terraform module page for new module variables. If a
+new setting has no obvious home page, it's a signal that one of those
+reference docs is missing a section — add it. Operators reading the
+release blog post should be able to click through to actionable docs;
+landing on "this setting exists but isn't documented anywhere" is the
+worst outcome.
 
 ### Open the PR
 
@@ -551,11 +636,11 @@ Docker Hub push), the tag exists but the image doesn't. Two options:
 
 ```
 - [ ] Phase 0: confirm release type + version with user
-- [ ] Phase 1: check changes in backend, frontend, base-image, sdk-rs, sdk-js
+- [ ] Phase 1: check changes in backend, frontend, base-image, sdk-rs, sdk-js; inventory new settings/flags
 - [ ] Phase 2: tag and push backend / frontend / base-image; wait for CI
 - [ ] Phase 3: sync sdk-rs to backend API collections, tag + push; bump sdk-js package.json; wait for publishes
-- [ ] Phase 4: bump Chart.yaml + values.yaml; commit + push; wait for chart-releaser
-- [ ] Phase 5: bump terraform variables.tf + README.md; commit, tag, push
-- [ ] Phase 6: write blog post; thank contributors; mention new SDK versions; open site PR
+- [ ] Phase 4: bump Chart.yaml + values.yaml; wire new settings into values + templates; commit + push; wait for chart-releaser
+- [ ] Phase 5: bump terraform variables.tf + README.md; expose new chart values as module variables; commit, tag, push
+- [ ] Phase 6: write blog post; thank contributors; mention new SDK versions; document every new setting/flag; open site PR
 - [ ] Phase 7: verify end-to-end (incl. crates.io and npm)
 ```
