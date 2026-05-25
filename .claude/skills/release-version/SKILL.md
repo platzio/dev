@@ -23,6 +23,9 @@ Sibling repos used here, relative to `dev/`:
 - `../sdk-rs` — Rust SDK published to crates.io as `platz-sdk`.
 - `../sdk-js` — TypeScript SDK published to npm as `@platzio/sdk`.
   Auto-generated from the backend's OpenAPI schema.
+- `../chart-ext` — Rust crate defining the chart-extension schema. Tag
+  releases; its `Cargo.toml` version must match the tag and track the
+  backend's `major.minor` (no `-beta` qualifier). See Phase 2a.
 - `../helm-charts` — the `platzio` chart.
 - `../terraform-aws-platzio` — Terraform module.
 - `../site` — public docs + blog (PR-only; see [[feedback-site-pr-only]]).
@@ -43,7 +46,7 @@ followed one or more betas.
 ## Phase 1 — Check what changed in each repo
 
 For each of `../backend`, `../frontend`, `../base-image`, `../sdk-rs`,
-`../sdk-js`, run:
+`../sdk-js`, `../chart-ext`, run:
 
 ```bash
 cd ../<repo>
@@ -79,6 +82,15 @@ is released. The exception is releases that touched no API surface
 (internal-only changes to k8s-agent, chart-discovery, resource-sync,
 etc.) — in that case sdk-rs can sit out.
 
+`chart-ext` is a Rust crate. Release it when there are commits on
+`../chart-ext/main` since its last `v...` tag. Its version is **not**
+the backend version verbatim — it tracks the backend's **`major.minor`
+only**, with its own patch number and **never** a `-beta` qualifier.
+So for a backend release of `v0.7.0-beta.2` (or `v0.7.0`), chart-ext's
+target is `v0.7.<patch>`, where `<patch>` is the next patch above
+chart-ext's last `v0.7.*` tag (or `.0` if `0.7` is new). Phase 2a
+covers the version-bump mechanics.
+
 Save the result as a small table you'll refer to throughout the rest of
 the workflow:
 
@@ -89,6 +101,7 @@ the workflow:
 | base-image | v8                | v8                | (unchanged — reuse)    |
 | sdk-rs     | v0.6.3            | v0.6.4            | (hand-maintained)      |
 | sdk-js     | 0.6.1             | 0.6.9             | (matches backend ver.) |
+| chart-ext  | v0.6.2            | v0.6.3            | (major.minor = backend)|
 
 ### Inventory new settings and flags
 
@@ -147,6 +160,72 @@ native runners; frontend ~5 minutes; base-image ~2 minutes.
 
 If the workflow fails, fix the underlying issue, delete the tag locally
 *and* on origin (`git push --delete origin <tag>`), re-tag, push again.
+
+## Phase 2a — Tag and bump `chart-ext`
+
+Skip this phase if Phase 1 found no commits on `../chart-ext/main` since
+its last tag.
+
+Unlike backend / frontend / base-image, chart-ext is **not** a
+tag-only release: the crate carries its version in `Cargo.toml`, and
+that version **must equal the tag** (minus the leading `v`). So you
+bump `Cargo.toml`, rebuild to refresh `Cargo.lock`, commit, *then*
+tag — the commit and the tag move together. If you tag without bumping
+`Cargo.toml`, the published crate's version won't match its tag.
+
+### Step 1: Pick the version
+
+chart-ext tracks the backend's **`major.minor` only**, with its own
+patch and **no `-beta` suffix**:
+
+```bash
+cd ../chart-ext
+git checkout main && git pull origin main
+git fetch origin --tags
+# BACKEND_MM = major.minor of the backend version being released,
+#   e.g. backend v0.7.0-beta.2  ->  BACKEND_MM=0.7
+# Find chart-ext's latest tag on that major.minor line:
+git tag --list "v${BACKEND_MM}.*" --sort=-v:refname | head -1
+```
+
+- If a `v${BACKEND_MM}.*` tag exists, increment its patch
+  (`v0.7.3` → `v0.7.4`).
+- If `${BACKEND_MM}` is a new line for chart-ext (no matching tag),
+  start at `v${BACKEND_MM}.0`.
+
+Call the result `CHART_EXT_VERSION` (e.g. `0.7.4`) and the tag
+`v${CHART_EXT_VERSION}`.
+
+### Step 2: Bump `Cargo.toml`, rebuild, commit, tag, push
+
+```bash
+cd ../chart-ext
+# edit Cargo.toml -> version = "<CHART_EXT_VERSION>"   (no leading v)
+cargo build                       # refreshes Cargo.lock with the new version
+git add Cargo.toml Cargo.lock
+git commit -m "v<CHART_EXT_VERSION>"
+git tag "v<CHART_EXT_VERSION>"
+git push origin main
+git push origin "v<CHART_EXT_VERSION>"
+```
+
+`cargo build` (not just `cargo check`) is what rewrites the crate's own
+entry in `Cargo.lock` to the new version; stage the resulting
+`Cargo.lock` change alongside `Cargo.toml` so the two never drift.
+Confirm the bump landed before tagging:
+
+```bash
+grep '^version' Cargo.toml          # must equal CHART_EXT_VERSION
+# confirm the crate's own entry in Cargo.lock moved too (use the
+# package name from Cargo.toml's [package] name, which may differ
+# from the repo name):
+PKG=$(grep -m1 '^name' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+grep -A1 "name = \"${PKG}\"" Cargo.lock     # must show the same version
+```
+
+If chart-ext has a release workflow on the `v**` tag, watch it the same
+way as Phase 2 and treat it as a wait point. If it has none, the tag is
+the release.
 
 ## Phase 3 — Release the SDKs
 
@@ -635,6 +714,12 @@ SDKs usually get the matching stable version as well (publish a new
 sdk-rs tag + sdk-js push to mirror the version even if the code is
 unchanged from the beta).
 
+chart-ext is the exception: because it only tracks `major.minor` and
+never carries a `-beta` suffix, a beta → stable promotion within the
+same `major.minor` (e.g. `v0.7.0-beta.2` → `v0.7.0`) leaves
+chart-ext's target unchanged. Skip Phase 2a entirely unless chart-ext
+itself had new commits — there's no version to bump.
+
 ### Hot-fix on an old release
 
 Out of scope for this skill — see whoever's currently doing release
@@ -656,8 +741,9 @@ Docker Hub push), the tag exists but the image doesn't. Two options:
 
 ```
 - [ ] Phase 0: confirm release type + version with user
-- [ ] Phase 1: check changes in backend, frontend, base-image, sdk-rs, sdk-js; inventory new settings/flags
+- [ ] Phase 1: check changes in backend, frontend, base-image, sdk-rs, sdk-js, chart-ext; inventory new settings/flags
 - [ ] Phase 2: tag and push backend / frontend / base-image; wait for CI
+- [ ] Phase 2a: bump chart-ext Cargo.toml to backend major.minor (no beta), cargo build to refresh Cargo.lock, commit, tag matching version, push
 - [ ] Phase 3: sync sdk-rs to backend API collections, tag + push; bump sdk-js package.json; wait for publishes
 - [ ] Phase 4: bump Chart.yaml + values.yaml; wire new settings into values + templates; commit + push; wait for chart-releaser
 - [ ] Phase 5: bump terraform variables.tf + README.md; expose new chart values as module variables; commit, tag, push
