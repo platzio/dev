@@ -133,6 +133,39 @@ Phases 4, 5, and 6. Don't skip it — settings that ship in the
 binaries but not in the chart values are invisible to operators
 running via helm, and that's a common release-day miss.
 
+### Release notes accumulate across the whole beta cycle
+
+Release notes — both the `artifacthub.io/changes` list in `Chart.yaml`
+(Phase 4) and the blog post (Phase 6) — must describe everything that
+changed since the **last stable release**, not just since the last tag.
+
+A version ships as a series of betas before its stable cut:
+`v0.7.0-beta.1`, `v0.7.0-beta.2`, …, then `v0.7.0`. **Always add up the
+notes across the betas:** when you write the notes for any beta, include
+that beta's changes *on top of* every earlier beta in the same cycle —
+the notes accumulate, they don't reset each beta. By the time you cut
+the stable `v0.7.0`, its notes are the **union of every beta's notes**
+for the whole cycle, so an operator who only ever installs stable
+releases still sees the complete changelog.
+
+Concretely, when computing the change list for notes, diff against the
+**last stable tag**, not `LAST_TAG`:
+
+```bash
+cd ../backend
+# last stable tag = newest tag with no -beta suffix
+LAST_STABLE=$(git tag --sort=-creatordate | grep -vE -- '-beta' | head -1)
+git log "${LAST_STABLE}..origin/main" --oneline
+```
+
+(The `LAST_TAG..origin/main` range from the table above is still the
+right one for deciding *which repos need a new tag*. It's only the
+release-notes range that must reach back to the last stable.)
+
+It helps to keep a running notes list across the cycle — append each
+beta's items rather than rewriting, and carry the accumulated list
+forward into the stable Chart.yaml annotation and blog post.
+
 ## Phase 2 — Tag and push backend / frontend / base-image
 
 For each repo that has changes:
@@ -442,8 +475,13 @@ Conventions:
   An unquoted entry will surface as a scan error on Artifact Hub
   (`invalid changes annotation`) after release, even though Helm itself
   accepts it.
-- **Don't sneak in unrelated items.** Only ship release notes for what
-  actually changed in this version's commits.
+- **Accumulate across the beta cycle.** The `changes` list isn't just
+  the delta since the previous tag — it's everything since the last
+  *stable* release (see [[Release notes accumulate across the whole
+  beta cycle]] in Phase 1). Each beta's list builds on the prior betas',
+  and the stable release's list is the union of all of them.
+- **Don't sneak in unrelated items.** Within that range, only ship
+  release notes for what actually changed in this release's commits.
 
 Then edit `../helm-charts/charts/platzio/values.yaml` and bump the
 image tags:
@@ -614,6 +652,12 @@ Notes:
 - **Truncate marker** is the MDX form `{/* truncate */}`. Do not write
   `<!-- truncate -->` (HTML comment); Docusaurus prefers the MDX form
   in `.md` files in this project.
+- **Cover the whole beta cycle, not just the last delta.** Like the
+  Chart.yaml `changes` list, the post accumulates across betas: diff
+  from the last *stable* tag (see [[Release notes accumulate across the
+  whole beta cycle]] in Phase 1), so the stable post covers every change
+  shipped across all of this cycle's betas. A stable post that only
+  describes the delta since the final beta — often nothing — is a miss.
 - **Don't list every commit.** Group changes thematically — backend
   changes, frontend changes, chart changes, terraform changes — and
   pick the meaningful ones. The Chart.yaml `artifacthub.io/changes`
@@ -714,6 +758,14 @@ SDKs usually get the matching stable version as well (publish a new
 sdk-rs tag + sdk-js push to mirror the version even if the code is
 unchanged from the beta).
 
+**The release notes are the gotcha here.** Diffing from the last beta
+shows little or nothing, but the stable release's notes must be the
+**sum of every beta in the cycle** — compute them from the last
+*stable* tag, per [[Release notes accumulate across the whole beta
+cycle]] in Phase 1. Carry the accumulated Chart.yaml `changes` list and
+the accumulated blog content forward into the stable cut; don't write a
+near-empty stable changelog just because the final beta added little.
+
 chart-ext is the exception: because it only tracks `major.minor` and
 never carries a `-beta` suffix, a beta → stable promotion within the
 same `major.minor` (e.g. `v0.7.0-beta.2` → `v0.7.0`) leaves
@@ -745,8 +797,8 @@ Docker Hub push), the tag exists but the image doesn't. Two options:
 - [ ] Phase 2: tag and push backend / frontend / base-image; wait for CI
 - [ ] Phase 2a: bump chart-ext Cargo.toml to backend major.minor (no beta), cargo build to refresh Cargo.lock, commit, tag matching version, push
 - [ ] Phase 3: sync sdk-rs to backend API collections, tag + push; bump sdk-js package.json; wait for publishes
-- [ ] Phase 4: bump Chart.yaml + values.yaml; wire new settings into values + templates; commit + push; wait for chart-releaser
+- [ ] Phase 4: bump Chart.yaml + values.yaml; accumulate changes notes across all betas (diff from last stable); wire new settings into values + templates; commit + push; wait for chart-releaser
 - [ ] Phase 5: bump terraform variables.tf + README.md; expose new chart values as module variables; commit, tag, push
-- [ ] Phase 6: write blog post; thank contributors; mention new SDK versions; document every new setting/flag; open site PR
+- [ ] Phase 6: write blog post accumulating all beta notes across the cycle; thank contributors; mention new SDK versions; document every new setting/flag; open site PR
 - [ ] Phase 7: verify end-to-end (incl. crates.io and npm)
 ```
