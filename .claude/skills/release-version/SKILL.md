@@ -11,9 +11,27 @@ description: |
 
 # Release a Platzio version
 
-Cutting a Platzio release touches **five repos** in a specific order. Each
-step has wait points where you're blocked on an upstream CI run; do
-**not** proceed past a wait point until the build completes.
+Cutting a Platzio release touches many sibling repos in a specific
+order. Each step has wait points where you're blocked on an upstream
+CI run; do **not** proceed past a wait point until the build completes.
+
+The ordering isn't arbitrary — it follows the dependency graph between
+the repos, so an upstream is always released and its consumers
+re-pinned before the downstream is tagged:
+
+1. **chart-ext** is a crates.io dependency of backend → bump it first,
+   then bump backend's `platz-chart-ext` pin in `Cargo.toml` before
+   tagging backend.
+2. **backend** uploads `openapi.yaml` to its GitHub release → tag it
+   after chart-ext but before sdk-js.
+3. **sdk-js** is generated from backend's `openapi.yaml` and is an npm
+   dependency of frontend → publish it after backend, then bump
+   frontend's `@platzio/sdk` pin before tagging frontend.
+4. **frontend** image is referenced by the helm chart → tag it before
+   the chart bump.
+
+If you skip ahead, the downstream release will ship against the old
+upstream and you'll need a redo.
 
 Sibling repos used here, relative to `dev/`:
 
@@ -25,7 +43,7 @@ Sibling repos used here, relative to `dev/`:
   Auto-generated from the backend's OpenAPI schema.
 - `../chart-ext` — Rust crate defining the chart-extension schema. Tag
   releases; its `Cargo.toml` version must match the tag and track the
-  backend's `major.minor` (no `-beta` qualifier). See Phase 2a.
+  backend's `major.minor` (no `-beta` qualifier). See Phase 2.
 - `../helm-charts` — the `platzio` chart.
 - `../terraform-aws-platzio` — Terraform module.
 - `../site` — public docs + blog (PR-only; see [[feedback-site-pr-only]]).
@@ -75,7 +93,7 @@ re-generation is cheap and avoids consumers drifting from the API.
 - there are commits on `../sdk-rs/main` since its last `v...` tag, **or**
 - the backend's API surface changed (new collection, new endpoint, new
   fields on existing structs) and the SDK hasn't been re-synced yet —
-  Phase 3a covers the sync work.
+  Phase 4a covers the sync work.
 
 In practice this means: release sdk-rs almost every time the backend
 is released. The exception is releases that touched no API surface
@@ -88,8 +106,9 @@ the backend version verbatim — it tracks the backend's **`major.minor`
 only**, with its own patch number and **never** a `-beta` qualifier.
 So for a backend release of `v0.7.0-beta.2` (or `v0.7.0`), chart-ext's
 target is `v0.7.<patch>`, where `<patch>` is the next patch above
-chart-ext's last `v0.7.*` tag (or `.0` if `0.7` is new). Phase 2a
-covers the version-bump mechanics.
+chart-ext's last `v0.7.*` tag (or `.0` if `0.7` is new). Phase 2
+covers the version-bump mechanics (and the follow-on bump to
+backend's `platz-chart-ext` dependency).
 
 Save the result as a small table you'll refer to throughout the rest of
 the workflow:
@@ -129,14 +148,14 @@ How to find them efficiently:
   config template.
 
 This inventory drives the **new-settings checklist** referenced in
-Phases 4, 5, and 6. Don't skip it — settings that ship in the
+Phases 6, 7, and 8. Don't skip it — settings that ship in the
 binaries but not in the chart values are invisible to operators
 running via helm, and that's a common release-day miss.
 
 ### Release notes accumulate across the whole beta cycle
 
 Release notes — both the `artifacthub.io/changes` list in `Chart.yaml`
-(Phase 4) and the blog post (Phase 6) — must describe everything that
+(Phase 6) and the blog post (Phase 8) — must describe everything that
 changed since the **last stable release**, not just since the last tag.
 
 A version ships as a series of betas before its stable cut:
@@ -166,38 +185,16 @@ It helps to keep a running notes list across the cycle — append each
 beta's items rather than rewriting, and carry the accumulated list
 forward into the stable Chart.yaml annotation and blog post.
 
-## Phase 2 — Tag and push backend / frontend / base-image
-
-For each repo that has changes:
-
-```bash
-cd ../<repo>
-git checkout main
-git pull origin main
-git tag "${NEW_TAG}"
-git push origin "${NEW_TAG}"
-```
-
-The tag push triggers a GitHub Actions release workflow (`v**` tag
-filter). Watch it complete before moving on:
-
-```bash
-gh -R platzio/<repo> run list --branch "${NEW_TAG}" --limit 1
-gh -R platzio/<repo> run watch <run-id>
-```
-
-⚠️ **Wait point.** Do not proceed until the workflow finishes
-successfully — the helm chart's image references won't exist on Docker
-Hub yet otherwise. Backend's multi-arch build takes ~20 minutes on
-native runners; frontend ~5 minutes; base-image ~2 minutes.
-
-If the workflow fails, fix the underlying issue, delete the tag locally
-*and* on origin (`git push --delete origin <tag>`), re-tag, push again.
-
-## Phase 2a — Tag and bump `chart-ext`
+## Phase 2 — Release `chart-ext`, then bump backend's dep
 
 Skip this phase if Phase 1 found no commits on `../chart-ext/main` since
 its last tag.
+
+This phase runs **before** Phase 3 tags the backend: backend's
+`workspace.dependencies.platz-chart-ext` pins a specific crates.io
+`version = "..."`, so a new chart-ext must be on crates.io and pinned
+in backend's `Cargo.toml` *before* backend is tagged — otherwise the
+backend release ships against the old chart-ext.
 
 Unlike backend / frontend / base-image, chart-ext is **not** a
 tag-only release: the crate carries its version in `Cargo.toml`, and
@@ -206,7 +203,7 @@ bump `Cargo.toml`, rebuild to refresh `Cargo.lock`, commit, *then*
 tag — the commit and the tag move together. If you tag without bumping
 `Cargo.toml`, the published crate's version won't match its tag.
 
-### Step 1: Pick the version
+### Step 1: Pick the chart-ext version
 
 chart-ext tracks the backend's **`major.minor` only**, with its own
 patch and **no `-beta` suffix**:
@@ -229,7 +226,7 @@ git tag --list "v${BACKEND_MM}.*" --sort=-v:refname | head -1
 Call the result `CHART_EXT_VERSION` (e.g. `0.7.4`) and the tag
 `v${CHART_EXT_VERSION}`.
 
-### Step 2: Bump `Cargo.toml`, rebuild, commit, tag, push
+### Step 2: Bump chart-ext `Cargo.toml`, rebuild, commit, tag, push
 
 ```bash
 cd ../chart-ext
@@ -256,18 +253,79 @@ PKG=$(grep -m1 '^name' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
 grep -A1 "name = \"${PKG}\"" Cargo.lock     # must show the same version
 ```
 
-If chart-ext has a release workflow on the `v**` tag, watch it the same
-way as Phase 2 and treat it as a wait point. If it has none, the tag is
-the release.
+The tag push triggers `.github/workflows/release.yml` which publishes
+to crates.io. Watch it and treat it as a wait point:
 
-## Phase 3 — Release the SDKs
+```bash
+gh -R platzio/chart-ext run list --branch "v<CHART_EXT_VERSION>" --limit 1
+gh -R platzio/chart-ext run watch <run-id>
+```
+
+⚠️ **Wait point.** Step 3 below bumps backend's pinned version, and
+`cargo build` will refuse to resolve a chart-ext version that isn't
+yet visible on crates.io. Verify at
+<https://crates.io/crates/platz-chart-ext> before continuing.
+
+### Step 3: Bump backend's `platz-chart-ext` dependency
+
+```bash
+cd ../backend
+git checkout main && git pull origin main
+# edit Cargo.toml's [workspace.dependencies.platz-chart-ext] block:
+#   version = "<CHART_EXT_VERSION>"
+cargo build                       # refreshes Cargo.lock to pull the new chart-ext
+git add Cargo.toml Cargo.lock
+git commit -m "Bump platz-chart-ext to <CHART_EXT_VERSION>"
+git push origin main
+```
+
+This commit must land on backend's main **before** Phase 3 tags the
+backend, so the backend release ships against the new chart-ext.
+If the new chart-ext changed its API surface, `cargo build` may
+surface compile errors in backend code — fix them in this same
+commit rather than splitting them across two backend commits.
+
+## Phase 3 — Tag and push backend / base-image
+
+For each repo that has changes (backend, base-image):
+
+```bash
+cd ../<repo>
+git checkout main
+git pull origin main
+git tag "${NEW_TAG}"
+git push origin "${NEW_TAG}"
+```
+
+The tag push triggers a GitHub Actions release workflow (`v**` tag
+filter). Watch it complete before moving on:
+
+```bash
+gh -R platzio/<repo> run list --branch "${NEW_TAG}" --limit 1
+gh -R platzio/<repo> run watch <run-id>
+```
+
+⚠️ **Wait point.** Do not proceed until the workflow finishes
+successfully — Phase 4's sdk-js publish reads `openapi.yaml` from the
+backend's GitHub release, and the helm chart's image references won't
+exist on Docker Hub yet either. Backend's multi-arch build takes
+~20 minutes on native runners; base-image ~2 minutes.
+
+**Frontend is not tagged here** — see Phase 5. Frontend pins
+`@platzio/sdk`, so its tag must come after sdk-js publishes (Phase 4)
+and frontend's `package.json` is bumped against the new sdk-js.
+
+If the workflow fails, fix the underlying issue, delete the tag locally
+*and* on origin (`git push --delete origin <tag>`), re-tag, push again.
+
+## Phase 4 — Release the SDKs
 
 The SDKs publish to public package registries. They must be released
-**after** Phase 2 (specifically, after the backend's release CI
+**after** Phase 3 (specifically, after the backend's release CI
 finishes), because `sdk-js` downloads `openapi.yaml` from the backend's
 GitHub release as part of its own build.
 
-### 3a. sdk-rs (`platz-sdk` on crates.io)
+### 4a. sdk-rs (`platz-sdk` on crates.io)
 
 By convention sdk-rs's version tracks backend so they read together in
 release notes. Match the new backend version unless there's a reason
@@ -374,11 +432,17 @@ step doesn't run; fix the code and re-tag (delete the old tag first).
 Verify the new version appears at
 <https://crates.io/crates/platz-sdk>.
 
-### 3b. sdk-js (`@platzio/sdk` on npm)
+### 4b. sdk-js (`@platzio/sdk` on npm), then bump frontend
 
 `sdk-js` is **always** released right after backend, because the npm
 SDK is auto-generated from the backend's OpenAPI schema. Consumers
 expect the npm version to match the backend version they're targeting.
+
+Crucially, **frontend pins `@platzio/sdk` in `package.json`** — so a
+frontend build picks up SDK type changes (driven by OpenAPI schema
+changes) only after its pin is bumped. This phase publishes sdk-js,
+then bumps frontend's pin on main; Phase 5 then tags the frontend
+against that bumped commit.
 
 1. Bump `package.json` to **the new backend version** (no leading `v`):
 
@@ -410,6 +474,26 @@ expect the npm version to match the backend version they're targeting.
 
 3. Verify at <https://www.npmjs.com/package/@platzio/sdk>.
 
+4. **Bump frontend's `@platzio/sdk` pin.** Once the new sdk-js is live
+   on npm, update frontend's pinned version so the next frontend build
+   pulls the new SDK (and its regenerated TypeScript types):
+
+   ```bash
+   cd ../frontend
+   git checkout main && git pull origin main
+   # edit package.json → "@platzio/sdk": "^<NEW_VERSION_NO_V>"
+   npm install                                # refresh package-lock.json
+   git add package.json package-lock.json
+   git commit -m "Bump @platzio/sdk to <NEW_VERSION>"
+   git push origin main
+   ```
+
+   If the SDK's regenerated types break frontend code (renamed
+   operations, removed fields, stricter optional/required), fix the
+   call sites in this same commit. **Don't move on to Phase 5 until
+   the frontend builds locally** (`npm run build`) — a broken main is
+   the last thing you want to tag.
+
 ### When the backend version doesn't match
 
 If the user wants `sdk-js` to point at a backend version other than its
@@ -421,7 +505,37 @@ generating against a backend pre-release. Don't use it in routine
 releases — it makes the npm version ↔ backend version mapping
 non-obvious.
 
-## Phase 4 — Update the helm chart
+## Phase 5 — Tag and push frontend
+
+Skip this phase if Phase 1 found no commits on `../frontend/main` since
+its last tag **and** Phase 4 didn't bump `@platzio/sdk`. Otherwise
+(which is almost always — see Phase 4's "always released right after
+backend" rule), tag the frontend now that its `package.json` pins the
+new SDK version.
+
+```bash
+cd ../frontend
+git checkout main
+git pull origin main      # picks up the @platzio/sdk bump from Phase 4
+git tag "${NEW_TAG}"
+git push origin "${NEW_TAG}"
+```
+
+Frontend's release workflow is `v**` tag-triggered:
+
+```bash
+gh -R platzio/frontend run list --branch "${NEW_TAG}" --limit 1
+gh -R platzio/frontend run watch <run-id>
+```
+
+⚠️ **Wait point.** Phase 6's helm chart sets the `frontend` image tag
+to `${NEW_TAG}` and pulls from Docker Hub at install time. The build
+must finish before the chart's release. Frontend builds take ~5 min.
+
+If the workflow fails, fix the underlying issue, delete the tag
+(`git push --delete origin <tag>`), re-tag, push again.
+
+## Phase 6 — Update the helm chart
 
 Edit `../helm-charts/charts/platzio/Chart.yaml`:
 
@@ -499,8 +613,9 @@ images:
     tag: <BASE_IMAGE_TAG>   # almost always the same as before
 ```
 
-Only bump the ones that have new tags from Phase 2. Reuse the existing
-tag verbatim for the others.
+Only bump the ones that have new tags from Phase 3 (backend,
+base-image) or Phase 5 (frontend). Reuse the existing tag verbatim
+for the others.
 
 ### Wire in any new settings from Phase 1's inventory
 
@@ -546,7 +661,7 @@ includes the new version
 (`https://platzio.github.io/helm-charts/index.yaml`). Takes about a
 minute.
 
-## Phase 5 — Update the Terraform module
+## Phase 7 — Update the Terraform module
 
 `platzio/terraform-aws-platzio` pins the helm chart version in two
 places. Both must move together.
@@ -576,7 +691,7 @@ places. Both must move together.
 ### Expose any new settings as Terraform variables
 
 For each entry in Phase 1's new-settings inventory that was wired into
-the helm chart in Phase 4, decide whether the Terraform module should
+the helm chart in Phase 6, decide whether the Terraform module should
 expose it too:
 
 - **Cluster-wide, operator-tunable settings** (timeouts, replica
@@ -608,7 +723,7 @@ git push origin "v<NEW_VERSION>"
 There's no CI here that builds a release artifact — the tag itself is
 the release.
 
-## Phase 6 — Blog post + docs PR in `../site`
+## Phase 8 — Blog post + docs PR in `../site`
 
 `platzio/site` is PR-only with publish-on-merge — see
 [[feedback-site-pr-only]]. Branch off main, commit, push, open PR. Do
@@ -717,7 +832,7 @@ EOF
 Merging this PR triggers the site's publish workflow and the release
 goes live on platz.io.
 
-## Phase 7 — Verify the whole chain
+## Phase 9 — Verify the whole chain
 
 After the site PR is merged:
 
@@ -741,22 +856,27 @@ away.
 ### Only the helm chart changed
 
 Sometimes the only thing that needs releasing is a chart values change
-(e.g., a default resource limit tweak). In that case skip Phases 1, 2
-and 3 entirely — bump only the chart's `version` (`appVersion` stays
-the same, since the binaries didn't move) and the prerelease / changes
-annotations. Reuse all three image tags from the previous values.yaml,
-and don't re-publish the SDKs.
+(e.g., a default resource limit tweak). In that case skip Phases 1
+through 5 entirely (no chart-ext bump, no backend/base-image/frontend
+tag, no SDK publish) — bump only the chart's `version` (`appVersion`
+stays the same, since the binaries didn't move) and the
+prerelease / changes annotations. Reuse all three image tags from the
+previous `values.yaml`, and don't re-publish the SDKs.
 
 ### Beta → stable transition
 
 When the user wants to promote `vX.Y.Z-beta.N` to `vX.Y.Z`, the
 backend / frontend / base-image likely don't have any new commits
 since the last beta. That's fine — reuse the beta's image tags
-verbatim in the helm chart, just bump the chart's `version` to the
-stable string and flip `artifacthub.io/prerelease` to `"false"`. The
-SDKs usually get the matching stable version as well (publish a new
-sdk-rs tag + sdk-js push to mirror the version even if the code is
-unchanged from the beta).
+verbatim in the helm chart (Phase 6), just bump the chart's `version`
+to the stable string and flip `artifacthub.io/prerelease` to `"false"`.
+The SDKs usually get the matching stable version as well (publish a
+new sdk-rs tag + sdk-js push to mirror the version even if the code is
+unchanged from the beta). When sdk-js republishes for stable, still
+bump frontend's `@platzio/sdk` pin per Phase 4 step 4 so the repo
+points at the stable SDK; you can then skip tagging the frontend in
+Phase 5 if it had no other commits, and the chart's frontend image
+stays at the beta tag.
 
 **The release notes are the gotcha here.** Diffing from the last beta
 shows little or nothing, but the stable release's notes must be the
@@ -769,7 +889,7 @@ near-empty stable changelog just because the final beta added little.
 chart-ext is the exception: because it only tracks `major.minor` and
 never carries a `-beta` suffix, a beta → stable promotion within the
 same `major.minor` (e.g. `v0.7.0-beta.2` → `v0.7.0`) leaves
-chart-ext's target unchanged. Skip Phase 2a entirely unless chart-ext
+chart-ext's target unchanged. Skip Phase 2 entirely unless chart-ext
 itself had new commits — there's no version to bump.
 
 ### Hot-fix on an old release
@@ -794,11 +914,12 @@ Docker Hub push), the tag exists but the image doesn't. Two options:
 ```
 - [ ] Phase 0: confirm release type + version with user
 - [ ] Phase 1: check changes in backend, frontend, base-image, sdk-rs, sdk-js, chart-ext; inventory new settings/flags
-- [ ] Phase 2: tag and push backend / frontend / base-image; wait for CI
-- [ ] Phase 2a: bump chart-ext Cargo.toml to backend major.minor (no beta), cargo build to refresh Cargo.lock, commit, tag matching version, push
-- [ ] Phase 3: sync sdk-rs to backend API collections, tag + push; bump sdk-js package.json; wait for publishes
-- [ ] Phase 4: bump Chart.yaml + values.yaml; accumulate changes notes across all betas (diff from last stable); wire new settings into values + templates; commit + push; wait for chart-releaser
-- [ ] Phase 5: bump terraform variables.tf + README.md; expose new chart values as module variables; commit, tag, push
-- [ ] Phase 6: write blog post accumulating all beta notes across the cycle; thank contributors; mention new SDK versions; document every new setting/flag; open site PR
-- [ ] Phase 7: verify end-to-end (incl. crates.io and npm)
+- [ ] Phase 2 (if chart-ext changed): bump chart-ext Cargo.toml (backend major.minor, no beta), cargo build, commit, tag matching version, push, wait for crates.io publish; then bump backend's platz-chart-ext version in Cargo.toml, cargo build, commit, push to backend main
+- [ ] Phase 3: tag and push backend / base-image (NOT frontend); wait for backend CI (uploads openapi.yaml)
+- [ ] Phase 4: sync sdk-rs to backend API collections, tag + push; bump sdk-js package.json, push, wait for npm publish; then bump frontend's @platzio/sdk pin, npm install, commit, push to frontend main
+- [ ] Phase 5: tag and push frontend; wait for CI
+- [ ] Phase 6: bump Chart.yaml + values.yaml; accumulate changes notes across all betas (diff from last stable); wire new settings into values + templates; commit + push; wait for chart-releaser
+- [ ] Phase 7: bump terraform variables.tf + README.md; expose new chart values as module variables; commit, tag, push
+- [ ] Phase 8: write blog post accumulating all beta notes across the cycle; thank contributors; mention new SDK versions; document every new setting/flag; open site PR
+- [ ] Phase 9: verify end-to-end (incl. crates.io and npm)
 ```
