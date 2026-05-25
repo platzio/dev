@@ -78,6 +78,25 @@ When updating `../site`:
   Use workspace-relative paths only (`../backend`, `../frontend`, …).
 - Never run `gh auth ...` subcommands — see [[feedback-no-gh-auth]].
 
+## Versioning across repos
+
+The Platzio release is identified by a single version line (e.g. `0.7.0`).
+The umbrella artifacts — the `helm-charts` chart and the backend / frontend
+release images — carry the full pre-release version during a beta
+(`0.7.0-beta.1`).
+
+Sub-packages (`chart-ext`, `sdk-rs`, `sdk-js`, `design`) track the **same
+minor version** as the release they ship with, but the pre-release
+(`-beta.N`) marker is not significant for them — prefer the plain version.
+So while the release is `0.7.0-beta.1`, the sub-packages should be `0.7.0`,
+not `0.6.x` and not `0.7.0-beta.1`.
+
+When bumping the release minor, bump every sub-package's `version`
+(`Cargo.toml` / `package.json`, plus the lockfile entry) to match. Don't
+let them drift behind (e.g. `design` stuck at `0.6.0` while the rest moved
+to `0.7.x`). The `release-version` skill handles this during a release;
+keep it in mind for any standalone version edits too.
+
 ## Bring-up
 
 ```bash
