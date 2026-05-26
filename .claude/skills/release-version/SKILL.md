@@ -670,6 +670,18 @@ Don't put release-specific change notes in the README — that's what
 `artifacthub.io/changes` is for. The README describes the chart as it
 exists *at this version*; it isn't a changelog.
 
+**Heading emoji convention.** The chart README (and Platzio docs in
+general) decorate `#` and `##` headings with a leading emoji, placed
+at the **start** of the line — not the end. `###` headings stay plain
+so the parameters tables don't turn into a wall of emoji. Use 🕸️ for
+Platz itself (the top-level title), 👋 for the welcoming "Introduction"
+section, and pick a tasteful emoji that matches the section's topic
+for the rest (⚡ TL;DR, ✅ Prerequisites, 📦 Installing, 🧹
+Uninstalling, ⚙️ Parameters, 🛠️ Configuration details, ⬆️ Upgrading,
+📚 Documentation, ⚖️ License). When you add a new top-level section,
+pick an emoji in the same spirit — don't leave a heading bare and
+don't double up emojis on a single line.
+
 Commit Chart.yaml, values.yaml, and README.md together:
 
 ```bash
