@@ -640,11 +640,41 @@ and make sure each entry is exposed by the chart:
 Reflect each newly exposed setting in `artifacthub.io/changes` as a
 `kind: added` entry so operators see it in the chart's changelog.
 
-Commit both files in one commit:
+### Update the chart README
+
+`charts/platzio/README.md` **is the chart's ArtifactHub page** —
+ArtifactHub renders this file (not the repo-root README) as the body of
+the chart's listing. If it's stale or empty, the listing looks broken
+to anyone evaluating Platz.
+
+Walk through it as part of every release and update what's drifted:
+
+- **Parameters tables.** Every entry in Phase 1's new-settings
+  inventory that was wired into `values.yaml` above must also appear
+  in the README's parameters tables (one per section: Images, Auth,
+  Database, API, Frontend, k8s-agent, chart-discovery, …). Match the
+  key name, type, default, and a one-line description. If a setting
+  was removed or renamed, fix the table — don't leave dead entries.
+- **TL;DR / install / uninstall snippets.** If the release changes
+  how operators install (new required secret, new mandatory value,
+  changed default ingress wiring), update the runnable snippets too.
+- **Concepts and workloads.** The "Introduction" section enumerates
+  Platz's workloads and the concept glossary. New workers, new
+  providers, or renamed concepts belong there.
+- **Configuration details sections.** "Multi-cluster deployments",
+  "Chart discovery", "Ingress and `ownUrlOverride`", etc. — read
+  these against the release's actual behavior and fix anything that
+  no longer matches.
+
+Don't put release-specific change notes in the README — that's what
+`artifacthub.io/changes` is for. The README describes the chart as it
+exists *at this version*; it isn't a changelog.
+
+Commit Chart.yaml, values.yaml, and README.md together:
 
 ```bash
 cd ../helm-charts
-git add charts/platzio/Chart.yaml charts/platzio/values.yaml
+git add charts/platzio/Chart.yaml charts/platzio/values.yaml charts/platzio/README.md
 git commit -m "<NEW_VERSION>"
 git push origin main
 ```
@@ -807,6 +837,12 @@ release blog post should be able to click through to actionable docs;
 landing on "this setting exists but isn't documented anywhere" is the
 worst outcome.
 
+The chart's own README (`charts/platzio/README.md`) is the
+parameters table that ships with the chart on ArtifactHub — Phase 6
+keeps it in sync. The site docs duplicate-but-elaborate: link to
+relevant guide pages from the blog post rather than repeating the
+ArtifactHub parameters reference verbatim.
+
 ### Open the PR
 
 ```bash
@@ -918,7 +954,7 @@ Docker Hub push), the tag exists but the image doesn't. Two options:
 - [ ] Phase 3: tag and push backend / base-image (NOT frontend); wait for backend CI (uploads openapi.yaml)
 - [ ] Phase 4: sync sdk-rs to backend API collections, tag + push; bump sdk-js package.json, push, wait for npm publish; then bump frontend's @platzio/sdk pin, npm install, commit, push to frontend main
 - [ ] Phase 5: tag and push frontend; wait for CI
-- [ ] Phase 6: bump Chart.yaml + values.yaml; accumulate changes notes across all betas (diff from last stable); wire new settings into values + templates; commit + push; wait for chart-releaser
+- [ ] Phase 6: bump Chart.yaml + values.yaml; accumulate changes notes across all betas (diff from last stable); wire new settings into values + templates; update charts/platzio/README.md (ArtifactHub page) — parameters tables, install snippets, concepts; commit + push; wait for chart-releaser
 - [ ] Phase 7: bump terraform variables.tf + README.md; expose new chart values as module variables; commit, tag, push
 - [ ] Phase 8: write blog post accumulating all beta notes across the cycle; thank contributors; mention new SDK versions; document every new setting/flag; open site PR
 - [ ] Phase 9: verify end-to-end (incl. crates.io and npm)
