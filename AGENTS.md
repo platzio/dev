@@ -25,6 +25,7 @@ little Platzio code itself. The actual code lives in the sibling repos.
 ├── helm-charts/               # the platzio helm chart deployed by Tilt
 ├── sdk-rs/                    # Rust SDK
 ├── sdk-js/                    # JS/TS SDK
+├── sdk-py/                    # Python SDK
 ├── chart-ext/                 # Helm chart extensions: values.ui.json, actions.json
 ├── cli/                       # platz CLI
 ├── docs/                      # user docs
@@ -85,14 +86,20 @@ The umbrella artifacts — the `helm-charts` chart and the backend / frontend
 release images — carry the full pre-release version during a beta
 (`0.7.0-beta.1`).
 
-Sub-packages (`chart-ext`, `sdk-rs`, `sdk-js`, `design`) track the **same
-minor version** as the release they ship with, but the pre-release
-(`-beta.N`) marker is not significant for them — prefer the plain version.
-So while the release is `0.7.0-beta.1`, the sub-packages should be `0.7.0`,
-not `0.6.x` and not `0.7.0-beta.1`.
+Sub-packages track the **same minor version** as the release they ship
+with. They split into two groups on the pre-release (`-beta.N`) marker:
+
+* `chart-ext` and `design` drop it — prefer the plain version. So while
+  the release is `0.7.0-beta.1`, these should be `0.7.0`, not `0.6.x` and
+  not `0.7.0-beta.1`.
+* The SDKs (`sdk-rs`, `sdk-js`, `sdk-py`) carry the **full** release
+  version, pre-release marker included, so a consumer can pin the SDK to
+  the exact backend version (e.g. sdk-js ships `0.7.0-beta.2`). `sdk-py`
+  publishes the PEP 440 spelling of that — `0.7.0-beta.3` → `0.7.0b3`.
 
 When bumping the release minor, bump every sub-package's `version`
-(`Cargo.toml` / `package.json`, plus the lockfile entry) to match. Don't
+(`Cargo.toml` / `package.json` / `pyproject.toml`, plus the lockfile
+entry) to match. Don't
 let them drift behind (e.g. `design` stuck at `0.6.0` while the rest moved
 to `0.7.x`). The `release-version` skill handles this during a release;
 keep it in mind for any standalone version edits too.

@@ -24,9 +24,10 @@ re-pinned before the downstream is tagged:
    tagging backend.
 2. **backend** uploads `openapi.yaml` to its GitHub release → tag it
    after chart-ext but before sdk-js.
-3. **sdk-js** is generated from backend's `openapi.yaml` and is an npm
-   dependency of frontend → publish it after backend, then bump
-   frontend's `@platzio/sdk` pin before tagging frontend.
+3. **sdk-js** and **sdk-py** are generated from backend's `openapi.yaml`
+   → publish them after backend. sdk-js is also an npm dependency of
+   frontend, so bump frontend's `@platzio/sdk` pin before tagging
+   frontend.
 4. **frontend** image is referenced by the helm chart → tag it before
    the chart bump.
 
@@ -41,6 +42,9 @@ Sibling repos used here, relative to `dev/`:
 - `../sdk-rs` — Rust SDK published to crates.io as `platz-sdk`.
 - `../sdk-js` — TypeScript SDK published to npm as `@platzio/sdk`.
   Auto-generated from the backend's OpenAPI schema.
+- `../sdk-py` — Python SDK published to PyPI as `platz`. Auto-generated
+  from the backend's OpenAPI schema (like sdk-js), built and published
+  with `uv` via PyPI trusted publishing.
 - `../chart-ext` — Rust crate defining the chart-extension schema. Tag
   releases; its `Cargo.toml` version must match the tag and track the
   backend's `major.minor` (no `-beta` qualifier). See Phase 2.
@@ -61,9 +65,9 @@ everything below it:
    re-pins backend's `platz-chart-ext` dependency (Phase 2), and that
    re-pin is itself a new backend commit — so backend gets a new tag
    even if it had no other commits of its own.
-2. **backend released → both SDKs must be released.** A new backend
-   build is a new API version, so `sdk-rs` **and** `sdk-js` both ship
-   with the matching backend version. This is mandatory: there is no
+2. **backend released → all three SDKs must be released.** A new backend
+   build is a new API version, so `sdk-rs`, `sdk-js`, **and** `sdk-py`
+   all ship with the matching backend version. This is mandatory: there is no
    "the API surface didn't change, so the SDK can sit out" exception. If
    backend ships a tag, the SDKs ship the matching version.
 3. **sdk-js released → frontend must be rebuilt.** Frontend pins
@@ -123,6 +127,15 @@ they target. Re-generation is cheap and there is no "the OpenAPI surface
 didn't change, so skip it" exception — if backend ships a tag, `sdk-js`
 ships the matching version.
 
+`sdk-py` works exactly like `sdk-js`: no git tags, it tracks
+`pyproject.toml` `version`, is auto-generated from the backend's OpenAPI
+schema, and **releases whenever the backend is released** with the
+matching version. One wrinkle: PyPI uses PEP 440, so the `X.Y.Z-beta.N`
+value in `pyproject.toml` publishes as `X.Y.ZbN` (e.g. `0.7.0-beta.3` →
+`0.7.0b3`). Keep the `pyproject.toml` value in the `-beta.N` spelling that
+mirrors the backend tag; the workflow derives the backend tag as
+`v<version>` from it. Phase 4c covers the mechanics.
+
 `sdk-rs` is a hand-maintained Rust crate. **Release it whenever the
 backend is released**, with the matching version — a new backend build
 is a new API version, and the SDKs must never lag it (see [[The change
@@ -161,6 +174,7 @@ the workflow:
 | base-image | v8                | v8                | (unchanged — reuse)    |
 | sdk-rs     | v0.6.3            | v0.6.4            | (hand-maintained)      |
 | sdk-js     | 0.6.1             | 0.6.9             | (matches backend ver.) |
+| sdk-py     | 0.6.1             | 0.6.9             | (matches backend ver.) |
 | chart-ext  | v0.6.2            | v0.6.3            | (major.minor = backend)|
 
 ### Inventory new settings and flags
@@ -363,8 +377,8 @@ If the workflow fails, fix the underlying issue, delete the tag locally
 
 The SDKs publish to public package registries. They must be released
 **after** Phase 3 (specifically, after the backend's release CI
-finishes), because `sdk-js` downloads `openapi.yaml` from the backend's
-GitHub release as part of its own build.
+finishes), because `sdk-js` and `sdk-py` download `openapi.yaml` from the
+backend's GitHub release as part of their own builds.
 
 ### 4a. sdk-rs (`platz-sdk` on crates.io)
 
@@ -535,6 +549,57 @@ against that bumped commit.
    the frontend builds locally** (`npm run build`) — a broken main is
    the last thing you want to tag.
 
+### 4c. sdk-py (`platz` on PyPI)
+
+`sdk-py` is the Python SDK. Like `sdk-js` it's auto-generated from the
+backend's `openapi.yaml` and published whenever the backend is released,
+with the matching version. Unlike sdk-js it is **not** a frontend
+dependency, so there's no downstream pin to bump.
+
+1. Bump `pyproject.toml` to the new backend version in `-beta.N` spelling
+   (no leading `v`):
+
+   ```bash
+   cd ../sdk-py
+   git checkout main && git pull origin main
+   # edit pyproject.toml → version = "<NEW_VERSION>"   (e.g. 0.7.0-beta.3)
+   git add pyproject.toml
+   git commit -m "v<NEW_VERSION>"
+   git push origin main
+   ```
+
+   For the **first** release the version is already set to the target, so
+   there's no bump to commit — trigger the workflow manually instead:
+
+   ```bash
+   gh -R platzio/sdk-py workflow run release.yaml --ref main
+   ```
+
+2. The push (or manual dispatch) triggers
+   `.github/workflows/release.yaml`:
+   - Reads `pyproject.toml` version → constructs `backend_tag=v<version>`.
+   - Downloads `openapi.yaml` from the matching backend GitHub release.
+   - Runs `./generate-sdk.sh openapi.yaml` to regenerate the `platz/`
+     package with `openapi-python-client` (run via `uv`).
+   - `uv build` produces the sdist + wheel.
+   - `uv publish` uploads to PyPI via **trusted publishing** (OIDC; no
+     token). `--check-url` makes it a no-op if the version already exists,
+     so a re-run or a non-version push to main is harmless.
+
+   ```bash
+   gh -R platzio/sdk-py run watch <run-id>
+   ```
+
+   ⚠️ **Wait point.** PyPI publishes are irrevocable — a deleted version
+   can't be re-uploaded under the same filename. If the publish step
+   fails, fix forward with the next version. The generate step emits two
+   benign warnings (dropped `oneOf` inline arms — see sdk-py's AGENTS.md);
+   they're expected and do not fail the build.
+
+3. PyPI normalizes the version to PEP 440 (`0.7.0-beta.3` → `0.7.0b3`).
+   Verify at <https://pypi.org/project/platz/>; betas install with
+   `pip install --pre platz`.
+
 ### When the backend version doesn't match
 
 If the user wants `sdk-js` to point at a backend version other than its
@@ -545,6 +610,9 @@ republishing the SDK without bumping its visible version, or for
 generating against a backend pre-release. Don't use it in routine
 releases — it makes the npm version ↔ backend version mapping
 non-obvious.
+
+`sdk-py` has the identical `version-override.txt` escape hatch — its
+workflow reads it before `pyproject.toml`. Same caveat applies.
 
 ## Phase 5 — Tag and push frontend
 
@@ -931,8 +999,10 @@ After the site PR is merged:
    tag references the right chart version.
 3. **crates.io** — <https://crates.io/crates/platz-sdk> shows the new
    version (if sdk-rs was released).
-4. **npm** — <https://www.npmjs.com/package/@platzio/sdk> shows the
-   new version (if sdk-js was released).
+4. **npm / PyPI** — <https://www.npmjs.com/package/@platzio/sdk> shows
+   the new sdk-js version, and <https://pypi.org/project/platz/> shows the
+   new sdk-py version (PEP 440 form, e.g. `0.7.0b3`), if the SDKs were
+   released.
 5. **Blog post** — `https://platz.io/blog/v<NEW_VERSION>` loads.
 6. **ArtifactHub** — within 30 min, the platzio chart on ArtifactHub
    updates to the new version and shows the change list.
@@ -960,10 +1030,10 @@ since the last beta. That's fine — reuse the beta's image tags
 verbatim in the helm chart (Phase 6), just bump the chart's `version`
 to the stable string and flip `artifacthub.io/prerelease` to `"false"`.
 The SDKs **must** get the matching stable version as well (publish a
-new sdk-rs tag + sdk-js push to mirror the version even if the code is
-unchanged from the beta) — the stable cut is a new backend tag, and a
-new backend tag always forces matching SDK releases (see [[The change
-cascade]]). When sdk-js republishes for stable, still bump frontend's
+new sdk-rs tag + sdk-js push + sdk-py push to mirror the version even if
+the code is unchanged from the beta) — the stable cut is a new backend
+tag, and a new backend tag always forces matching SDK releases (see
+[[The change cascade]]). When sdk-js republishes for stable, still bump frontend's
 `@platzio/sdk` pin per Phase 4 step 4 so the repo points at the stable
 SDK; you can then skip tagging the frontend in Phase 5 if it had no
 other commits, and the chart's frontend image stays at the beta tag.
@@ -1006,7 +1076,7 @@ Docker Hub push), the tag exists but the image doesn't. Two options:
 - [ ] Phase 1: check changes in backend, frontend, base-image, sdk-rs, sdk-js, chart-ext; inventory new settings/flags
 - [ ] Phase 2 (if chart-ext changed): bump chart-ext Cargo.toml (backend major.minor, no beta), cargo build, commit, tag matching version, push, wait for crates.io publish; then bump backend's platz-chart-ext version in Cargo.toml, cargo build, commit, push to backend main
 - [ ] Phase 3: tag and push backend / base-image (NOT frontend); wait for backend CI (uploads openapi.yaml)
-- [ ] Phase 4: sync sdk-rs to backend API collections, tag + push; bump sdk-js package.json, push, wait for npm publish; then bump frontend's @platzio/sdk pin, npm install, commit, push to frontend main
+- [ ] Phase 4: sync sdk-rs to backend API collections, tag + push; bump sdk-js package.json, push, wait for npm publish; bump sdk-py pyproject.toml (or `gh workflow run` for the first release), wait for PyPI publish; then bump frontend's @platzio/sdk pin, npm install, commit, push to frontend main
 - [ ] Phase 5: tag and push frontend; wait for CI
 - [ ] Phase 6: bump Chart.yaml + values.yaml; accumulate changes notes across all betas (diff from last stable); wire new settings into values + templates; update charts/platzio/README.md (ArtifactHub page) — parameters tables, install snippets, concepts; commit + push; wait for chart-releaser
 - [ ] Phase 7: bump terraform variables.tf + README.md; expose new chart values as module variables; commit, tag, push
