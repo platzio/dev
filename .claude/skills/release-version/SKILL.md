@@ -48,6 +48,40 @@ Sibling repos used here, relative to `dev/`:
 - `../terraform-aws-platzio` — Terraform module.
 - `../site` — public docs + blog (PR-only; see [[feedback-site-pr-only]]).
 
+## The change cascade — which repos a change forces
+
+The dependency order above also decides **which repos must release**,
+not just the sequence they release in. A change never stays contained
+to the repo it landed in — it forces a fresh release of everything
+downstream of it, including repos that have no commits of their own.
+Find the highest repo in the chain that changed, then release it and
+everything below it:
+
+1. **chart-ext changed → backend must be rebuilt.** Releasing chart-ext
+   re-pins backend's `platz-chart-ext` dependency (Phase 2), and that
+   re-pin is itself a new backend commit — so backend gets a new tag
+   even if it had no other commits of its own.
+2. **backend released → both SDKs must be released.** A new backend
+   build is a new API version, so `sdk-rs` **and** `sdk-js` both ship
+   with the matching backend version. This is mandatory: there is no
+   "the API surface didn't change, so the SDK can sit out" exception. If
+   backend ships a tag, the SDKs ship the matching version.
+3. **sdk-js released → frontend must be rebuilt.** Frontend pins
+   `@platzio/sdk`; bump the pin, then **build and lint locally**
+   (`npm run build`) to prove the regenerated types didn't break
+   anything, and only then tag the frontend.
+4. **frontend / backend / base-image images exist → do the umbrella
+   release.** Once the images are published, continue to the release
+   part: the helm chart (Phase 6), the Terraform module (Phase 7), and
+   the site blog + docs (Phase 8).
+
+So the only genuine judgment call is at the **top** of the chain — did
+chart-ext or backend actually change? Everything downstream of a change
+is mechanical: it ships, with a version matching the backend's. The one
+repo outside this cascade is `base-image`: it's a build input, not a
+downstream consumer, so it's released only when its own source changed
+(and it rarely does).
+
 ## Phase 0 — Ask the user
 
 Before doing anything else, ask **two** questions via `AskUserQuestion`:
@@ -80,30 +114,37 @@ git log "${LAST_TAG}..origin/main" --oneline
 `base-image` uses a non-semver scheme (`v1`, `v2`, …, `v8`). Bump it
 only if its source actually changed.
 
-`sdk-js` doesn't keep git tags — it tracks `package.json` `version`. To
-decide whether it needs a release, compare the current `package.json`
-`version` to the backend version it was last generated against and to
-the OpenAPI schema in the backend release: if the backend's OpenAPI
-surface changed and you want consumers to see it, bump `sdk-js`. The
-default is to release `sdk-js` whenever the backend is released —
-re-generation is cheap and avoids consumers drifting from the API.
+`sdk-js` doesn't keep git tags — it tracks `package.json` `version`.
+**Release it whenever the backend is released**, with the matching
+version (see [[The change cascade]] above): a new backend build is a new
+API version, and `sdk-js` is auto-generated from the backend's OpenAPI
+schema, so consumers expect the npm version to match the backend version
+they target. Re-generation is cheap and there is no "the OpenAPI surface
+didn't change, so skip it" exception — if backend ships a tag, `sdk-js`
+ships the matching version.
 
-`sdk-rs` is a hand-maintained Rust crate. Release whenever:
+`sdk-rs` is a hand-maintained Rust crate. **Release it whenever the
+backend is released**, with the matching version — a new backend build
+is a new API version, and the SDKs must never lag it (see [[The change
+cascade]] above). This is mandatory: there is no "the API surface didn't
+change, so sdk-rs can sit out" exception. If backend ships a tag, sdk-rs
+ships the matching version. The only time sdk-rs releases *without* a
+backend release is when it has standalone commits of its own on
+`../sdk-rs/main` since its last `v...` tag.
 
-- there are commits on `../sdk-rs/main` since its last `v...` tag, **or**
-- the backend's API surface changed (new collection, new endpoint, new
-  fields on existing structs) and the SDK hasn't been re-synced yet —
-  Phase 4a covers the sync work.
+Because it's hand-maintained (no codegen from OpenAPI), each release is
+also a maintenance pass to keep the SDK aligned with the backend's API
+surface — otherwise the SDK drifts and consumers can't reach newer
+collections. Phase 4a covers the sync work.
 
-In practice this means: release sdk-rs almost every time the backend
-is released. The exception is releases that touched no API surface
-(internal-only changes to k8s-agent, chart-discovery, resource-sync,
-etc.) — in that case sdk-rs can sit out.
-
-`chart-ext` is a Rust crate. Release it when there are commits on
-`../chart-ext/main` since its last `v...` tag. Its version is **not**
-the backend version verbatim — it tracks the backend's **`major.minor`
-only**, with its own patch number and **never** a `-beta` qualifier.
+`chart-ext` is a Rust crate. **Release it whenever there are commits on
+`../chart-ext/main` since its last `v...` tag** — this is the top of the
+dependency cascade, so a chart-ext release is not optional: it forces a
+backend rebuild (Phase 2 re-pins backend's `platz-chart-ext`), which in
+turn forces both SDKs and the frontend (see [[The change cascade]]
+above). Its version is **not** the backend version verbatim — it tracks
+the backend's **`major.minor` only**, with its own patch number and
+**never** a `-beta` qualifier.
 So for a backend release of `v0.7.0-beta.2` (or `v0.7.0`), chart-ext's
 target is `v0.7.<patch>`, where `<patch>` is the next patch above
 chart-ext's last `v0.7.*` tag (or `.0` if `0.7` is new). Phase 2
@@ -918,13 +959,14 @@ backend / frontend / base-image likely don't have any new commits
 since the last beta. That's fine — reuse the beta's image tags
 verbatim in the helm chart (Phase 6), just bump the chart's `version`
 to the stable string and flip `artifacthub.io/prerelease` to `"false"`.
-The SDKs usually get the matching stable version as well (publish a
+The SDKs **must** get the matching stable version as well (publish a
 new sdk-rs tag + sdk-js push to mirror the version even if the code is
-unchanged from the beta). When sdk-js republishes for stable, still
-bump frontend's `@platzio/sdk` pin per Phase 4 step 4 so the repo
-points at the stable SDK; you can then skip tagging the frontend in
-Phase 5 if it had no other commits, and the chart's frontend image
-stays at the beta tag.
+unchanged from the beta) — the stable cut is a new backend tag, and a
+new backend tag always forces matching SDK releases (see [[The change
+cascade]]). When sdk-js republishes for stable, still bump frontend's
+`@platzio/sdk` pin per Phase 4 step 4 so the repo points at the stable
+SDK; you can then skip tagging the frontend in Phase 5 if it had no
+other commits, and the chart's frontend image stays at the beta tag.
 
 **The release notes are the gotcha here.** Diffing from the last beta
 shows little or nothing, but the stable release's notes must be the
