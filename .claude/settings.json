@@ -22,6 +22,7 @@
       "../helm-charts",
       "../sdk-rs",
       "../sdk-js",
+      "../sdk-py",
       "../chart-ext",
       "../cli",
       "../docs",
