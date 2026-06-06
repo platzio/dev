@@ -157,3 +157,10 @@ skills. Currently:
   Platzio release across all sibling repos (backend → frontend →
   base-image → helm-charts → terraform → site). Triggered when the user
   asks to release a version.
+* [`upgrade-dependencies`](.claude/skills/upgrade-dependencies/SKILL.md) —
+  upgrades third-party dependencies (crates, npm, Python, Docker base
+  images, GitHub Actions, Terraform providers) across the source repos,
+  keeping shared versions aligned across repos (e.g. design→frontend
+  bootstrap) and verifying each build. Triggered when the user asks to
+  upgrade dependencies. Distinct from a release: it never touches the
+  internal `platz-*` version pins that the release skill owns.

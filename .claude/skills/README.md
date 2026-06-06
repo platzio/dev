@@ -10,6 +10,12 @@ whose description matches what the user is asking for.
   release across backend, frontend, base-image, helm-charts, terraform,
   and site (blog + docs). Use when the user says any variant of
   "release a version".
+- [`upgrade-dependencies/`](upgrade-dependencies/SKILL.md) — upgrades
+  third-party dependencies across every source repo (Rust crates, npm
+  packages, Python deps, Docker base images, GitHub Actions, Terraform
+  providers), keeping cross-repo shared versions aligned (e.g.
+  design→frontend bootstrap) and verifying each build. Use when the
+  user says any variant of "upgrade dependencies".
 
 ## Adding a new skill
 
