@@ -340,14 +340,61 @@ If the new chart-ext changed its API surface, `cargo build` may
 surface compile errors in backend code — fix them in this same
 commit rather than splitting them across two backend commits.
 
-## Phase 3 — Tag and push backend / base-image
+## Phase 3 — Align backend versions, then tag and push backend / base-image
+
+### Align the backend's in-tree versions first
+
+A git tag doesn't change the versions baked into a repo's source. The backend
+workspace crates each carry their own `version` in `Cargo.toml`, and that feeds
+`CARGO_PKG_VERSION` — which is exactly what `utoipa` reports as the OpenAPI
+`info.version`. That version flows downstream into the published `openapi.yaml`,
+the rendered API reference on the docs site, and the generated SDKs. If you tag
+`v0.7.0-beta.4` but leave the crates at `0.1.0`, the schema advertises `0.1.0`
+and the crate metadata misstates the release.
+
+**Invariant: every repo's in-tree version must equal the release version, not
+just the git tag.** Bump the backend crates *before* tagging:
+
+```bash
+cd ../backend
+git checkout main && git pull origin main
+
+# Set every workspace member's [package] version to the release version
+# (no leading v, keep the beta suffix, e.g. 0.7.0-beta.4). `cargo set-version`
+# (from cargo-edit) does the whole workspace in one shot:
+cargo install cargo-edit --quiet 2>/dev/null || true
+cargo set-version --workspace "<NEW_VERSION_NO_V>"
+#   …or, without cargo-edit, edit each member crate's [package] version by hand:
+#   api, auth, db, k8s-agent, chart-discovery, resource-sync, status-updates, otel.
+
+cargo build                       # refresh Cargo.lock with the new versions
+# verify the bump — every member crate must show the release version:
+grep -rn '^version' Cargo.toml */Cargo.toml | grep -v '\[workspace'
+```
+
+`cargo set-version --workspace` moves only the member crates' own versions; it
+leaves `[workspace.dependencies]` pins like `platz-chart-ext` alone (those are
+dependency requirements, not this workspace's version). Eyeball the diff to be
+sure nothing else moved, then commit:
+
+```bash
+git add -A
+git commit -m "v<NEW_VERSION>"
+git push origin main
+```
+
+> `base-image` has no `Cargo.toml`/`package.json` version to align — it uses the
+> `v1`, `v2`, … image scheme, so there's nothing to bump for it; go straight to
+> tagging it below.
+
+### Tag and push
 
 For each repo that has changes (backend, base-image):
 
 ```bash
 cd ../<repo>
 git checkout main
-git pull origin main
+git pull origin main      # backend: also picks up the version-bump commit above
 git tag "${NEW_TAG}"
 git push origin "${NEW_TAG}"
 ```
@@ -614,21 +661,37 @@ non-obvious.
 `sdk-py` has the identical `version-override.txt` escape hatch — its
 workflow reads it before `pyproject.toml`. Same caveat applies.
 
-## Phase 5 — Tag and push frontend
+## Phase 5 — Align frontend version, then tag and push
 
 Skip this phase if Phase 1 found no commits on `../frontend/main` since
 its last tag **and** Phase 4 didn't bump `@platzio/sdk`. Otherwise
 (which is almost always — see Phase 4's "always released right after
-backend" rule), tag the frontend now that its `package.json` pins the
-new SDK version.
+backend" rule), align the frontend's in-tree version and tag it now that
+its `package.json` pins the new SDK version.
+
+Like the backend, the frontend is otherwise tag-only, so its
+`package.json` `version` drifts (it has sat at `0.1.0`) unless you bump
+it here. Per the **in-tree version invariant** (Phase 3), set it to the
+release version before tagging:
 
 ```bash
 cd ../frontend
 git checkout main
 git pull origin main      # picks up the @platzio/sdk bump from Phase 4
+
+# Set package.json (and package-lock.json) to the release version, no tag/commit:
+npm version "<NEW_VERSION_NO_V>" --no-git-tag-version
+git add package.json package-lock.json
+git commit -m "v<NEW_VERSION>"
+git push origin main
+
 git tag "${NEW_TAG}"
 git push origin "${NEW_TAG}"
 ```
+
+(You can fold the `npm version` bump into the Phase 4 `@platzio/sdk`
+pin commit instead of making a separate commit — just make sure the
+version lands on `main` before the tag.)
 
 Frontend's release workflow is `v**` tag-triggered:
 
@@ -1006,6 +1069,16 @@ After the site PR is merged:
 5. **Blog post** — `https://platz.io/blog/v<NEW_VERSION>` loads.
 6. **ArtifactHub** — within 30 min, the platzio chart on ArtifactHub
    updates to the new version and shows the change list.
+7. **In-tree versions match the tag** — the backend release's
+   `openapi.yaml` advertises the release version, and the frontend tag's
+   `package.json` does too. A lingering `0.1.0` means the Phase 3 / 5
+   bump was missed:
+
+   ```bash
+   curl -sSL "https://github.com/platzio/backend/releases/download/<NEW_TAG>/openapi.yaml" \
+     | grep -A2 '^info:'                       # version: must be <NEW_VERSION>
+   git -C ../frontend show "<NEW_TAG>:package.json" | grep '"version"'
+   ```
 
 Open issues or follow-up PRs for anything that's broken before walking
 away.
@@ -1037,6 +1110,15 @@ tag, and a new backend tag always forces matching SDK releases (see
 `@platzio/sdk` pin per Phase 4 step 4 so the repo points at the stable
 SDK; you can then skip tagging the frontend in Phase 5 if it had no
 other commits, and the chart's frontend image stays at the beta tag.
+
+On the **in-tree version invariant** (Phases 3 / 5): when you reuse the
+beta's images verbatim for a stable cut, you are deliberately *not*
+rebuilding the backend/frontend, so their in-tree `Cargo.toml` /
+`package.json` versions stay at the last beta string — that's expected,
+since the chart points at the beta image tag. Only bump-and-re-tag the
+backend/frontend (forcing a fresh image build that bakes in `vX.Y.Z`)
+if you specifically want the stable version compiled into the binaries;
+otherwise the beta-versioned image is the released stable artifact.
 
 **The release notes are the gotcha here.** Diffing from the last beta
 shows little or nothing, but the stable release's notes must be the
@@ -1075,9 +1157,9 @@ Docker Hub push), the tag exists but the image doesn't. Two options:
 - [ ] Phase 0: confirm release type + version with user
 - [ ] Phase 1: check changes in backend, frontend, base-image, sdk-rs, sdk-js, chart-ext; inventory new settings/flags
 - [ ] Phase 2 (if chart-ext changed): bump chart-ext Cargo.toml (backend major.minor, no beta), cargo build, commit, tag matching version, push, wait for crates.io publish; then bump backend's platz-chart-ext version in Cargo.toml, cargo build, commit, push to backend main
-- [ ] Phase 3: tag and push backend / base-image (NOT frontend); wait for backend CI (uploads openapi.yaml)
+- [ ] Phase 3: bump backend workspace crate versions to the release version (`cargo set-version --workspace`), cargo build, commit, push; then tag and push backend / base-image (NOT frontend); wait for backend CI (uploads openapi.yaml)
 - [ ] Phase 4: sync sdk-rs to backend API collections, tag + push; bump sdk-js package.json, push, wait for npm publish; bump sdk-py pyproject.toml (or `gh workflow run` for the first release), wait for PyPI publish; then bump frontend's @platzio/sdk pin, npm install, commit, push to frontend main
-- [ ] Phase 5: tag and push frontend; wait for CI
+- [ ] Phase 5: bump frontend package.json version to the release version (`npm version --no-git-tag-version`), commit, push; tag and push frontend; wait for CI
 - [ ] Phase 6: bump Chart.yaml + values.yaml; accumulate changes notes across all betas (diff from last stable); wire new settings into values + templates; update charts/platzio/README.md (ArtifactHub page) — parameters tables, install snippets, concepts; commit + push; wait for chart-releaser
 - [ ] Phase 7: bump terraform variables.tf + README.md; expose new chart values as module variables; commit, tag, push
 - [ ] Phase 8: write blog post accumulating all beta notes across the cycle; thank contributors; mention new SDK versions; document every new setting/flag; open site PR
