@@ -1049,8 +1049,14 @@ EOF
 )"
 ```
 
-Merging this PR triggers the site's publish workflow and the release
-goes live on platz.io.
+**Stop here. Do not merge the PR yourself** — even when CI is green and
+Phase 9's blog-post check needs the post live, the merge is the user's
+call. The site's `main` is protected against direct pushes specifically
+because merging publishes immediately to platz.io; the human approval
+*is* the editorial review. Surface the PR URL, note that Phase 9 will
+fail on the blog-post URL until it's merged, and wait. Treat this as
+non-negotiable: do not call `gh pr merge` on `platzio/site` under any
+circumstance.
 
 ## Phase 9 — Verify the whole chain
 

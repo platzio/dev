@@ -230,8 +230,8 @@ floating tags like `rust:1-trixie` the upgrade is just rebuilding.
 
 ### GitHub Actions
 
-Used across the repos and currently **inconsistent** — part of this skill
-is normalizing them to one version each:
+Two independent checks here. Both run on **every** action in the
+inventory; an action that passes one doesn't get a pass on the other.
 
 ```bash
 # from the workspace root, see every action and the versions in play:
@@ -239,13 +239,41 @@ grep -rhoE 'uses:[[:space:]]*[A-Za-z0-9._/-]+@[A-Za-z0-9._-]+' \
   */.github/workflows/ | sed 's/uses:[[:space:]]*//' | sort | uniq -c
 ```
 
-As of this writing the mixed ones are `actions/checkout@v4|v5|v6`,
-`docker/setup-buildx-action@v3|v4`, `docker/login-action@v3|v4`,
-`docker/build-push-action@v6|v7`. Pick the newest each repo's CI tolerates
-and align every workflow to it. Look up each action's latest release on its
-GitHub releases page. Flag any `@master`/`@main` float (e.g.
-`ShubhamTatvamasi/free-disk-space-action@master`) — unpinned third-party
-actions are a supply-chain risk; propose pinning to a tag or SHA.
+1. **Drift across repos (consistency).** If the same action appears at
+   different versions across repos (e.g. `actions/checkout@v4|v5|v6`),
+   pick one and align every workflow to it. As of this writing the
+   commonly-mixed ones are `actions/checkout`, `docker/setup-buildx-action`,
+   `docker/login-action`, `docker/build-push-action`.
+
+2. **Drift from upstream (currency).** Open every action's GitHub
+   releases page and compare its newest release to the version the
+   repos use. **Do this even when the inventory shows the action at one
+   uniform version across all repos** — "consistent across the org" is
+   not the same as "current upstream." Example miss: a previous
+   upgrade pass left `actions/setup-node@v4` alone because all repos
+   already used v4, when upstream had `v5` (Sept 2024) and `v6`
+   (Oct 2024) — and `v4` shipped Node 20, which GitHub later forced
+   to Node 24. The same trap applies to any action that has sat at one
+   version long enough that upstream has moved past it.
+
+   Cheap one-liner to surface the gap:
+
+   ```bash
+   for a in $(grep -rhoE 'uses:[[:space:]]*[A-Za-z0-9._/-]+@v[0-9]+' \
+                */.github/workflows/ | sed 's/uses:[[:space:]]*//' \
+                | sort -u | grep -v '@master\|@main'); do
+     repo=$(echo "$a" | cut -d@ -f1); used=$(echo "$a" | cut -d@ -f2)
+     latest=$(gh release list --repo "$repo" --limit 1 \
+                --json tagName -q '.[0].tagName' 2>/dev/null)
+     [ -n "$latest" ] && [ "$used" != "$latest" ] \
+       && echo "  $repo: in-use=$used  upstream=$latest"
+   done
+   ```
+
+3. **Flag any `@master`/`@main` float** (e.g. `ShubhamTatvamasi/free-disk-space-action@master`)
+   — unpinned third-party actions are a supply-chain risk; propose
+   pinning to a tag or SHA, and prefer well-maintained alternatives if
+   the upstream repo itself has gone unmaintained.
 
 ### Terraform (`terraform-aws-platzio`)
 
