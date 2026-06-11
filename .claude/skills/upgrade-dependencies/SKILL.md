@@ -166,14 +166,20 @@ Some third-party libraries live in multiple repos and should move together:
   supported interpreters; keep them in step with what the release workflow
   (`astral-sh/setup-uv`) actually runs.
 
-## How to find new versions
+## How to upgrade, per ecosystem
+
+The goal is **latest everything**: every third-party dep at its newest
+release, **majors included**, with code fixed forward to match. Do not
+crawl within existing semver ranges and call it done — `cargo update` /
+`npm update` style range-respecting refreshes are the floor, not the job.
+The commands below *write* the newest versions into the manifests; the
+build gates then tell you which code to fix.
 
 There is **no Dependabot or Renovate opening update PRs** in any repo —
 upgrades are manual. But GitHub's **Dependabot alerts** (each repo's
 Security tab) are still active: they scan the *lockfiles* on the default
-branch against the GitHub Advisory Database, so they catch vulnerable
-**transitive** dependencies that none of the "outdated" tools below will
-ever show you. Discovering newer versions (this section) and clearing the
+branch, so they catch vulnerable **transitive** deps even when every
+direct dep is at latest. Upgrading (this section) and clearing the
 advisories (see [[Security audits]]) are two separate passes — an upgrade
 is not done until **both** are clean.
 
@@ -181,46 +187,42 @@ is not done until **both** are clean.
 
 ```bash
 cd ../<repo>
-# Patch/minor within existing semver ranges — refreshes Cargo.lock only:
-cargo update --dry-run
-# Crates that have a newer release than the manifest's caret allows
-# (needs cargo-edit / cargo-outdated; install if missing):
-cargo outdated -R           # or: cargo upgrade --dry-run --incompatible
+# Rewrite Cargo.toml (incl. [workspace.dependencies]) to the newest
+# versions, majors included (needs cargo-edit; install if missing):
+cargo upgrade -i --exclude platz-chart-ext
+cargo update                # then refresh the lockfile to match
 ```
 
-`cargo update` moves the lockfile within the `Cargo.toml` ranges; bumping a
-crate to a new **major** means editing the version in `Cargo.toml` (the
-per-crate `[dependencies]` for backend members, the root
-`[workspace.dependencies]` for the shared ones) and then `cargo build`.
+The `--exclude` keeps the release-managed internal pin out of it. After
+the upgrade, build and **fix the code** — renamed APIs, new trait bounds,
+changed defaults — until the repo's verify gate passes. If a crate won't
+move because a sibling still pins an older major (e.g. `diesel` held back
+by `diesel-async`), upgrading the sibling in the same pass *is* the job;
+only park an upgrade and pin back with the user's explicit sign-off.
 
 ### Node (`frontend`, `design`, `sdk-js`, `site`)
 
 ```bash
 cd ../<repo>
-npm outdated                # shows current / wanted / latest per package
-# To stage the bumps into package.json (needs npm-check-updates):
-npx npm-check-updates       # preview
-npx npm-check-updates -u    # write new ranges into package.json, then npm install
+# Write the newest version of everything into package.json:
+npx npm-check-updates -u --reject "@platzio/*"
+npm install                 # regenerate the lockfile against the new ranges
 ```
 
-`npm outdated`'s **wanted** column is what `npm update` would take within
-the existing caret; **latest** is the true newest (often a major bump that
-needs a manifest edit). `design` has no lockfile — just edit
-`package.json`.
+The `--reject` protects the release-managed `@platzio/sdk` pin (git deps
+like `@platzio/design` are skipped by ncu anyway). Then build and fix
+whatever the new majors break. Keep the [[shared-library edges]] aligned —
+with every repo at latest they align by construction. `design` has no
+lockfile — ncu rewrites `package.json` and there's nothing to install.
 
 ### Python (`sdk-py`)
 
-`sdk-py` declares ranges in `pyproject.toml` (`httpx>=0.23,<0.29`,
-`attrs>=22.2.0`, `python-dateutil>=2.8.0`) and builds with `uv`/hatchling.
-Check PyPI for newer releases and widen/raise the ranges by hand:
-
-```bash
-cd ../sdk-py
-uv pip list --outdated        # against a synced venv, if present
-```
-
-Also track the codegen tool (`openapi-python-client`) used by
-`generate-sdk.sh`.
+`sdk-py` declares ranges in `pyproject.toml` (`httpx`, `attrs`,
+`python-dateutil`) and builds with `uv`/hatchling. The list is short —
+check PyPI for each dep's newest release, raise the lower bounds and lift
+any upper caps to include it, and bump the codegen tool
+(`openapi-python-client`) used by `generate-sdk.sh`. Then regenerate and
+build.
 
 ### Docker base images (`base-image`, `backend`, `frontend`, `dev`)
 
@@ -273,12 +275,12 @@ release-managed — don't touch it.
 
 ## Security audits — clearing the GitHub security tab
 
-`npm outdated`, `npm-check-updates`, and `cargo outdated` only inspect
-**direct** dependencies in the manifest. The security tab scans the whole
-**lockfile**, so a repo can be fully "up to date" by the tools above and
-still carry vulnerable transitive deps (real example: `frontend` had every
-direct dep at latest while `@vueuse/head` pinned a vulnerable `unhead`
-underneath it). Run a local audit in every repo as part of this skill —
+Even with every direct dep at latest, you're not done: `cargo upgrade`
+and `npm-check-updates` only rewrite **direct** dependencies in the
+manifest, while the security tab scans the whole **lockfile** — so a
+vulnerable transitive dep pinned by an up-to-date parent slips straight
+through (real example: `frontend` had every direct dep at latest while
+`@vueuse/head` pinned a vulnerable `unhead` underneath it). Run a local audit in every repo as part of this skill —
 the local tools query the same advisory databases that power the tab
 (GitHub Advisory Database for npm/pip, RustSec for cargo), so a clean
 local audit is the hermetic equivalent of a green security tab. Don't
@@ -377,10 +379,12 @@ after a `design` bump, the real test is `frontend`'s `npm run build`; after
 a shared-crate bump in `chart-ext`, it's `backend` and `sdk-rs` compiling
 against it.
 
-If a gate fails, fix forward in the same pass — adjust call sites for a
-renamed API, regenerate a lockfile, reflow formatting — rather than pinning
-back to the old version, unless the upstream change is genuinely breaking
-and not worth absorbing now (note those and surface them to the user).
+If a gate fails, **fix forward in the same pass** — adjust call sites for
+a renamed API, migrate off a deprecated entry point, regenerate a
+lockfile, reflow formatting. Breakage from a new major is the expected
+cost of the upgrade, not a reason to retreat from it. Pinning back to the
+old version is the exception, taken only with the user's explicit
+sign-off when the upstream change is genuinely not worth absorbing now.
 
 ## Recommended order
 
@@ -389,9 +393,9 @@ already-upgraded outputs:
 
 1. **`chart-ext`** — bump its third-party crates (and Actions, base image
    if any), verify with the feature-powerset gate.
-2. **`backend`** and **`sdk-rs`** — `cargo update` + manual major bumps;
-   align the [[shared-library edges|shared Rust crates]] with what
-   `chart-ext` now uses; verify each.
+2. **`backend`** and **`sdk-rs`** — `cargo upgrade -i` + `cargo update`,
+   fix code; align the [[shared-library edges|shared Rust crates]] with
+   what `chart-ext` now uses; verify each.
 3. **`design`** — bump bootstrap / fontawesome / fonts; no build of its
    own.
 4. **`frontend`** — match `design`'s bootstrap, bump the rest of
@@ -433,14 +437,14 @@ should reference each other in the message so the pair is obvious.
 
 ```
 - [ ] Sort repos: source (in scope) vs derivative (external pins only)
-- [ ] chart-ext: cargo outdated → bump crates + Actions + base image; cargo hack feature-powerset clippy+test
-- [ ] backend: cargo update + major bumps; align shared crates w/ chart-ext; clippy --release -D warnings + test --release
-- [ ] sdk-rs: cargo update + bumps; align shared crates; clippy -D warnings + build
-- [ ] design: bump bootstrap/fontawesome/fonts (no build of its own)
-- [ ] frontend: match design's bootstrap; bump pkgs (axios/typescript aligned w/ sdk-js); npm ci && build && lint
-- [ ] sdk-js: bump tsup/typescript (align w/ frontend); npm install && build
-- [ ] sdk-py: widen dep ranges + codegen; regenerate + uv build
-- [ ] site: bump docusaurus/prettier/typescript; build + typecheck + format:check (PR-only repo!)
+- [ ] chart-ext: cargo upgrade -i + cargo update; fix code; cargo hack feature-powerset clippy+test
+- [ ] backend: cargo upgrade -i --exclude platz-chart-ext + cargo update; fix code; align shared crates w/ chart-ext; clippy --release -D warnings + test --release
+- [ ] sdk-rs: cargo upgrade -i --exclude platz-chart-ext + cargo update; fix code; align shared crates; clippy -D warnings + build
+- [ ] design: ncu -u (bootstrap/fontawesome/fonts; no build of its own)
+- [ ] frontend: ncu -u --reject "@platzio/*"; match design's bootstrap, axios/typescript aligned w/ sdk-js; fix code; npm install && build && lint
+- [ ] sdk-js: ncu -u --reject "@platzio/*"; align typescript w/ frontend; npm install && build
+- [ ] sdk-py: raise ranges to latest + bump codegen; regenerate + uv build
+- [ ] site: ncu -u; fix code; build + typecheck + format:check (PR-only repo!)
 - [ ] base-image: bump alpine; docker build; smoke-test helm/kubectl/aws/bash
 - [ ] dev: bump manifest image tags (postgres/dex/registry/kindest); tilt up / dry-run
 - [ ] terraform: raise provider+module constraints (NOT chart_version); init -upgrade + validate + plan
