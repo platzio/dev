@@ -8,7 +8,11 @@ description: |
   versions". Walks every source repo's third-party dependencies (Rust
   crates, npm packages, Python deps, Docker base images, GitHub Actions,
   Terraform providers), keeps cross-repo shared versions aligned (e.g.
-  design→frontend bootstrap), and verifies each upgrade builds. Does
+  design→frontend bootstrap), and verifies each upgrade builds. Also use
+  when the user says "fix the security alerts", "clear the security tab",
+  "fix the Dependabot alerts", or "there are vulnerabilities in <repo>" —
+  the skill audits every lockfile against the advisory databases and
+  clears known vulnerabilities, including transitive ones. Does
   *not* cut a release — that's the release-version skill.
 ---
 
@@ -164,8 +168,14 @@ Some third-party libraries live in multiple repos and should move together:
 
 ## How to find new versions
 
-There is **no Dependabot or Renovate** in any repo — upgrades are manual.
-Here's how to discover what's behind, per ecosystem.
+There is **no Dependabot or Renovate opening update PRs** in any repo —
+upgrades are manual. But GitHub's **Dependabot alerts** (each repo's
+Security tab) are still active: they scan the *lockfiles* on the default
+branch against the GitHub Advisory Database, so they catch vulnerable
+**transitive** dependencies that none of the "outdated" tools below will
+ever show you. Discovering newer versions (this section) and clearing the
+advisories (see [[Security audits]]) are two separate passes — an upgrade
+is not done until **both** are clean.
 
 ### Rust (`backend`, `chart-ext`, `sdk-rs`)
 
@@ -261,10 +271,77 @@ newest provider majors and any third-party module versions (e.g. the RDS
 module pinned in `database.tf`). Remember: the chart_version is
 release-managed — don't touch it.
 
+## Security audits — clearing the GitHub security tab
+
+`npm outdated`, `npm-check-updates`, and `cargo outdated` only inspect
+**direct** dependencies in the manifest. The security tab scans the whole
+**lockfile**, so a repo can be fully "up to date" by the tools above and
+still carry vulnerable transitive deps (real example: `frontend` had every
+direct dep at latest while `@vueuse/head` pinned a vulnerable `unhead`
+underneath it). Run a local audit in every repo as part of this skill —
+the local tools query the same advisory databases that power the tab
+(GitHub Advisory Database for npm/pip, RustSec for cargo), so a clean
+local audit is the hermetic equivalent of a green security tab. Don't
+rely on reading the tab itself: it lags (it only re-scans the *default*
+branch, so your fixes won't clear it until they merge/release) and isn't
+always reachable from a session.
+
+### Audit commands per ecosystem
+
+```bash
+# Node (frontend, sdk-js, site — anything with a package-lock.json):
+npm audit
+# design has no committed lockfile: npm install first (don't commit the
+# generated lockfile), then npm audit.
+
+# Rust (backend, chart-ext, sdk-rs) — audits Cargo.lock against RustSec:
+cargo audit                  # cargo install cargo-audit --locked, if missing
+
+# Python (sdk-py) — resolve pyproject.toml, then audit the resolution:
+uv pip compile pyproject.toml -o /tmp/sdk-py-reqs.txt
+uvx pip-audit -r /tmp/sdk-py-reqs.txt
+```
+
+Docker base images and Terraform providers have no equivalent lockfile
+audit here — for those, being on the newest tag/constraint (previous
+sections) is the bar.
+
+### Fixing what the audit finds
+
+Work from least to most invasive; the goal is the *fixed* version of the
+transitive dep, reached through the shallowest possible change:
+
+1. **`npm audit fix`** (no `--force`) / **`cargo update -p <crate>`** —
+   re-resolves the lockfile within existing semver ranges. Commit the
+   lockfile; this alone clears most alerts.
+2. **Bump or replace the direct parent** that pins the vulnerable range.
+   Check the parent's repo for a release that lifts the pin — and check
+   whether the parent is deprecated with a designated successor (e.g.
+   `@vueuse/head` is deprecated in favor of `@unhead/vue`; the fix is the
+   migration, not a parent bump). This may be a major + small code change;
+   that's still the right fix.
+3. **`overrides`** (npm, in `package.json`) as a last resort when the
+   parent has no fixed release — force the transitive dep to the patched
+   version, verify the build, and leave a comment to drop the override
+   once the parent catches up.
+
+Never run `npm audit fix --force` blindly: it satisfies the audit by
+installing *whatever* non-vulnerable version exists, including **downgrading
+the parent** (for the unhead case it proposed `@vueuse/head@0.9.8`, a major
+downgrade). Read its plan and apply step 2 yourself instead.
+
+After any fix, re-run the repo's verify gate **and** the audit. The bar:
+**zero known vulnerabilities in every source repo**, or each remaining
+advisory explicitly surfaced to the user with the reason it can't be
+cleared (no fixed release exists, dev-only tooling, accepted risk). Never
+leave an advisory unmentioned.
+
 ## How to verify an upgrade went fine
 
 Run each repo's own gate (the `Verify with` column in [[Source repos]]),
-which mirrors what its CI runs. The minimum bar per repo:
+which mirrors what its CI runs, **plus the repo's security audit** (see
+[[Security audits]]) — a repo isn't verified until both pass. The minimum
+bar per repo:
 
 - **Rust** — `cargo clippy --release -- -D warnings` (warnings are errors
   in CI) **and** `cargo test --release`. For `chart-ext` use the
@@ -334,6 +411,9 @@ already-upgraded outputs:
     `template`.
 12. **GitHub Actions across all repos** — normalize to one version each;
     this can be done per-repo as you touch it, or as a final sweep.
+13. **Security audit sweep** — re-run the [[Security audits]] commands in
+    every source repo after all bumps have landed, so nothing a later
+    step re-resolved reintroduces an advisory.
 
 ## Committing and pushing
 
@@ -366,6 +446,7 @@ should reference each other in the message so the pair is obvious.
 - [ ] terraform: raise provider+module constraints (NOT chart_version); init -upgrade + validate + plan
 - [ ] helm-charts: bump external sidecar images only (NOT platzio image tags); helm lint + template
 - [ ] GitHub Actions: normalize checkout/buildx/login/build-push to one version each; flag @master pins
+- [ ] Security audit every repo: npm audit / cargo audit / pip-audit → fix transitive vulns (lockfile re-resolve → parent bump → overrides); zero known vulns or list exceptions to the user
 - [ ] Verify every repo's CI gate passes; fix forward
 - [ ] Commit per repo to the feature branch; site via PR; don't touch release-managed pins
 ```
