@@ -939,9 +939,27 @@ the release.
 
 ## Phase 8 — Blog post + docs PR in `../site`
 
-`platzio/site` is PR-only with publish-on-merge — see
-[[feedback-site-pr-only]]. Branch off main, commit, push, open PR. Do
-**not** push to main directly.
+> ### 🛑 Site merge is not yours to make
+>
+> `platzio/site` is PR-only with publish-on-merge — see
+> [[feedback-site-pr-only]]. Two strict rules govern this phase:
+>
+> 1. **Never push to `platzio/site/main` directly.** Always branch +
+>    commit + push + open a PR. The branch is protected; even if the
+>    push somehow succeeded it would be a violation.
+> 2. **Never merge a `platzio/site` PR yourself.** Do not call
+>    `gh pr merge` on this repo, do not use any tool that merges it,
+>    do not work around branch protection via the API. The merge is
+>    the human's call — it publishes immediately to platz.io, so the
+>    human approval *is* the editorial review. Phase 9's blog-post
+>    URL check will fail until the user merges; that is the expected
+>    state, not a problem to solve. Surface the PR URL, note the Phase
+>    9 dependency, and wait for the user. This rule has no exceptions
+>    — not "CI is green," not "the runbook needs the post live," not
+>    "the change is mechanical." Stop and hand off.
+>
+> Apply both rules whenever you touch `../site`, in this phase or any
+> other.
 
 ### Write the post
 
@@ -981,16 +999,36 @@ Notes:
 - **Truncate marker** is the MDX form `{/* truncate */}`. Do not write
   `<!-- truncate -->` (HTML comment); Docusaurus prefers the MDX form
   in `.md` files in this project.
-- **Cover the whole beta cycle, not just the last delta.** Like the
-  Chart.yaml `changes` list, the post accumulates across betas: diff
-  from the last *stable* tag (see [[Release notes accumulate across the
-  whole beta cycle]] in Phase 1), so the stable post covers every change
-  shipped across all of this cycle's betas. A stable post that only
-  describes the delta since the final beta — often nothing — is a miss.
-- **Don't list every commit.** Group changes thematically — backend
-  changes, frontend changes, chart changes, terraform changes — and
-  pick the meaningful ones. The Chart.yaml `artifacthub.io/changes`
-  list is the terse version; the blog post is the prose.
+- **The blog post body must include the full content of every prior
+  beta post in this cycle.** Mentioning prior betas in the intro
+  ("…on top of beta.1–beta.4's X, Y, Z…") is **not** sufficient — the
+  body sections must duplicate or summarize each prior beta's themed
+  sections, so the post stands on its own for a reader who's seeing
+  the cycle for the first time. The simplest way: copy each prior
+  beta's `##` sections into the new post, then add the new beta's
+  sections on top. The stable cut's post is therefore the union of
+  every beta's content, and an operator who only installs stable still
+  reads the whole story. **Computing the change range:** diff from the
+  last *stable* tag (see [[Release notes accumulate across the whole
+  beta cycle]] in Phase 1), not from the previous beta. A post that
+  only describes the delta since the previous tag is a strict
+  violation of this rule.
+- **Don't list every commit, and don't pad.** Group changes thematically
+  — backend changes, frontend changes, chart changes, terraform changes
+  — and pick the meaningful ones. The Chart.yaml
+  `artifacthub.io/changes` list is the terse version; the blog post is
+  the prose.
+- **No user-invisible items in the blog post.** If a change has no
+  user-observable behavior (dependency lockfile refreshes, internal
+  refactors that don't change behavior, CI/workflow housekeeping, dep
+  bumps within the same major with no API change, etc.) it does **not**
+  go in the blog post, regardless of whether it shipped in this
+  version. Those changes live in commit history where users who want
+  them can find them. A thin beta with no user-facing changes either
+  carries forward the prior betas' content and skips the "new in
+  this beta" section, or — if combined with a stable cut — gets folded
+  into the stable's notes instead. Padding a release post with
+  internal-only items is worse than a short post.
 - **Thank external contributors.** Look at `git log
   v<OLD>..v<NEW>` across all the repos and pick out commits authored
   by people who aren't core maintainers. Mention them with their
@@ -1049,14 +1087,10 @@ EOF
 )"
 ```
 
-**Stop here. Do not merge the PR yourself** — even when CI is green and
-Phase 9's blog-post check needs the post live, the merge is the user's
-call. The site's `main` is protected against direct pushes specifically
-because merging publishes immediately to platz.io; the human approval
-*is* the editorial review. Surface the PR URL, note that Phase 9 will
-fail on the blog-post URL until it's merged, and wait. Treat this as
-non-negotiable: do not call `gh pr merge` on `platzio/site` under any
-circumstance.
+**Stop here. Hand off to the user.** Per the 🛑 banner at the top of
+this phase: do not merge the PR. Phase 9's blog-post URL check fails
+until the user merges, and that is the correct state. Surface the PR
+URL and wait.
 
 ## Phase 9 — Verify the whole chain
 
