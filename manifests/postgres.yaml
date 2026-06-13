@@ -39,9 +39,41 @@ spec:
       labels:
         app: postgres
     spec:
+      # Generate a self-signed server certificate before Postgres starts so the
+      # local database serves TLS, exercising the backend's TLS code path
+      # (PGSSLMODE). The key must be owned by the postgres user (uid 70 in the
+      # alpine image) with 0600 perms or the server refuses to start.
+      initContainers:
+        - name: generate-tls-cert
+          image: postgres:17-alpine
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              if [ ! -f /certs/server.crt ]; then
+                command -v openssl >/dev/null 2>&1 || apk add --no-cache openssl
+                openssl req -new -x509 -days 3650 -nodes \
+                  -subj "/CN=postgres.platz.svc.cluster.local" \
+                  -keyout /certs/server.key \
+                  -out /certs/server.crt
+              fi
+              chmod 600 /certs/server.key
+              chown 70:70 /certs/server.key /certs/server.crt
+          volumeMounts:
+            - name: tls
+              mountPath: /certs
       containers:
         - name: postgres
           image: postgres:17-alpine
+          # Enable TLS using the certificate produced by the init container.
+          args:
+            - -c
+            - ssl=on
+            - -c
+            - ssl_cert_file=/certs/server.crt
+            - -c
+            - ssl_key_file=/certs/server.key
           ports:
             - containerPort: 5432
           env:
@@ -58,6 +90,10 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
+            - name: tls
+              mountPath: /certs
       volumes:
         - name: data
+          emptyDir: {}
+        - name: tls
           emptyDir: {}
