@@ -98,6 +98,36 @@ The local stack uses `local` and `oci`.
 PGHOST=127.0.0.1 PGPORT=15432 PGUSER=postgres PGPASSWORD=postgres PGDATABASE=platz psql
 ```
 
+## Database TLS
+
+The in-cluster Postgres ([manifests/postgres.yaml](manifests/postgres.yaml))
+serves TLS: an init container generates a self-signed certificate and the
+server starts with `ssl=on`. This exercises the backend's TLS support
+end-to-end in local dev.
+
+The backend's TLS behavior is controlled by `PGSSLMODE` (and `PGSSLROOTCERT`
+for a custom CA), mirroring libpq's `sslmode`:
+
+* `disable` — plaintext (the pre-TLS behavior).
+* `prefer` *(default)* — use TLS if the server offers it, otherwise plaintext;
+  the server certificate is **not** verified.
+* `require` — always use TLS; the certificate is **not** verified.
+* `verify-full` — always use TLS and verify the certificate chain **and**
+  hostname against the system trust store or `PGSSLROOTCERT`.
+
+Because the default is `prefer`, the local workers connect to the dev Postgres
+over TLS automatically — no extra configuration needed. The certificate is
+self-signed, so `verify-full` won't work locally without distributing the CA;
+`prefer`/`require` are the right choices for the local stack.
+
+Verify a connection is encrypted from inside the cluster:
+
+```bash
+kubectl -n platz exec deploy/postgres -- \
+  psql -U postgres -d platz -c \
+  "SELECT ssl, version FROM pg_stat_ssl JOIN pg_stat_activity USING (pid) WHERE usename = 'postgres';"
+```
+
 ## Adding test charts
 
 Test charts live under [charts/](charts/) and are pushed to the in-cluster
